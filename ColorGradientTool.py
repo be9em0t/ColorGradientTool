@@ -12,10 +12,10 @@ import sys
 import math
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QColorDialog,
-    QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QLineEdit
+    QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit
 )
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 
 # coloraide (required)
 from coloraide import Color
@@ -124,9 +124,8 @@ def parse_hex_string(s):
 def format_rgb01_from_tuple(t):
     # format numbers with up to 5 decimals, strip trailing zeros, drop leading zero
     def fmt(v):
+        # Keep a leading zero for values like 0.335 (do not drop the leading 0)
         s = f"{v:.5f}".rstrip('0').rstrip('.')
-        if s.startswith('0.'):
-            s = s[1:]
         return s
     return ', '.join(fmt(x) for x in t)
 
@@ -246,7 +245,8 @@ def interpolate(hex_a, hex_b, steps, mode):
 class GradientPreview(QLabel):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumHeight(80)
+        # Match the height of the color swatches (80 px)
+        self.setFixedHeight(80)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._colors = ['#ff0000', '#0000ff']
 
@@ -256,7 +256,8 @@ class GradientPreview(QLabel):
 
     def update_preview(self):
         w = max(200, self.width())
-        h = max(40, self.height())
+        # Use the widget's actual height (fixed to match swatches)
+        h = max(1, self.height())
         pix = QPixmap(w, h)
         painter = QPainter(pix)
         img = pix.toImage()
@@ -282,6 +283,38 @@ class GradientPreview(QLabel):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.update_preview()
+
+
+class MultilineEdit(QTextEdit):
+    """QTextEdit that emits editingFinished on focus out, Ctrl+Enter, or Enter when single-line."""
+    editingFinished = Signal()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        try:
+            self.editingFinished.emit()
+        except Exception:
+            pass
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        mods = event.modifiers()
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            # Ctrl/Cmd+Enter -> submit
+            if mods & (Qt.ControlModifier | Qt.MetaModifier):
+                try:
+                    self.editingFinished.emit()
+                except Exception:
+                    pass
+                return
+            # If the content is single-line, Enter should submit instead of inserting newline
+            if '\n' not in self.toPlainText():
+                try:
+                    self.editingFinished.emit()
+                except Exception:
+                    pass
+                return
+        super().keyPressEvent(event)
 
 
 class ColorTile(QPushButton):
@@ -401,7 +434,13 @@ class MainWindow(QWidget):
 
         top_grid = QGridLayout()
         top_grid.setHorizontalSpacing(20)
-        top_grid.addWidget(QLabel("Tile A"), 0, 0, alignment=Qt.AlignLeft)
+        # Labels for the edge tiles
+        label_a = QLabel("Tile A")
+        label_a.setStyleSheet('color: #eaeff2;')
+        top_grid.addWidget(label_a, 0, 0, alignment=Qt.AlignLeft)
+        label_b = QLabel("Tile B")
+        label_b.setStyleSheet('color: #eaeff2;')
+        top_grid.addWidget(label_b, 0, 2, alignment=Qt.AlignRight)
 
         tiles_layout = QHBoxLayout()
         tiles_layout.setSpacing(18)
@@ -443,132 +482,175 @@ class MainWindow(QWidget):
 
         # --- Color format converter fields (independent utility) ---
         conv_layout = QGridLayout()
-        lbl_rgb01 = QLabel('RGB(0-1)')
-        lbl_rgb256 = QLabel('RGB(256)')
+        # Converter area: three multiline boxes for Hex, RGB(256), RGB(0-1)
         lbl_hex = QLabel('Hex')
-        lbl_rgb01.setStyleSheet('color: #eaeff2;')
-        lbl_rgb256.setStyleSheet('color: #eaeff2;')
         lbl_hex.setStyleSheet('color: #eaeff2;')
+        lbl_rgb256 = QLabel('RGB(256)')
+        lbl_rgb256.setStyleSheet('color: #eaeff2;')
+        lbl_rgb01 = QLabel('RGB(0-1)')
+        lbl_rgb01.setStyleSheet('color: #eaeff2;')
 
-        self.conv_rgb01 = QLineEdit()
-        self.conv_rgb256 = QLineEdit()
-        self.conv_hex = QLineEdit()
+        self.conv_hex = MultilineEdit()
+        self.conv_rgb256 = MultilineEdit()
+        self.conv_rgb01 = MultilineEdit()
 
-        # Place labels above the fields
-        conv_layout.addWidget(lbl_rgb01, 0, 0)
+        # Layout labels above the respective boxes
+        conv_layout.addWidget(lbl_hex, 0, 0)
         conv_layout.addWidget(lbl_rgb256, 0, 1)
-        conv_layout.addWidget(lbl_hex, 0, 2)
+        conv_layout.addWidget(lbl_rgb01, 0, 2)
 
-        conv_layout.addWidget(self.conv_rgb01, 1, 0)
+        conv_layout.addWidget(self.conv_hex, 1, 0)
         conv_layout.addWidget(self.conv_rgb256, 1, 1)
-        conv_layout.addWidget(self.conv_hex, 1, 2)
+        conv_layout.addWidget(self.conv_rgb01, 1, 2)
 
         # Initialize converter hex to tile A by default; load_config() will override if INI has a value
-        self.conv_hex.setText(self.tile_a.hex)
+        self.conv_hex.setPlainText(self.tile_a.hex)
 
-        # Initialize other fields from the hex value
-        try:
-            hx = parse_hex_string(self.conv_hex.text())
-            r01 = hex_to_rgb01(hx)
-            r256 = hex_to_rgb256(hx)
-            self.conv_rgb01.setText(format_rgb01_from_tuple(r01))
-            self.conv_rgb256.setText(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
-            # store normalized hex
-            self.conv_hex.setText(hx)
-        except Exception:
-            pass
-
-        # Handlers (avoid recursion with a flag)
-        self._conv_updating = False
-
-        def on_rgb01_changed():
-            if self._conv_updating:
-                return
-            txt = self.conv_rgb01.text()
-            try:
-                vals = parse_rgb01_string(txt)
-                # update others
-                self._conv_updating = True
-                self.conv_rgb256.setText(format_rgb256_from_tuple(tuple(int(round(v*255)) for v in vals)))
-                hx = rgb01_to_hex(vals)
-                self.conv_hex.setText(hx)
-                # clear validation styling on success
-                self.conv_rgb01.setStyleSheet('')
-                self.conv_rgb256.setStyleSheet('')
-                self.conv_hex.setStyleSheet('')
-                self._conv_updating = False
-            except Exception:
-                # invalid input - indicate visually
-                try:
-                    self.conv_rgb01.setStyleSheet('border: 2px solid #d9534f;')
-                except Exception:
-                    pass
-                self._conv_updating = False
-
-        def on_rgb256_changed():
-            if self._conv_updating:
-                return
-            txt = self.conv_rgb256.text()
-            try:
-                vals = parse_rgb256_string(txt)
-                self._conv_updating = True
-                r01 = tuple(v/255.0 for v in vals)
-                self.conv_rgb01.setText(format_rgb01_from_tuple(r01))
-                hx = rgb01_to_hex(r01)
-                self.conv_hex.setText(hx)
-                # clear validation styling on success
-                self.conv_rgb256.setStyleSheet('')
-                self.conv_rgb01.setStyleSheet('')
-                self.conv_hex.setStyleSheet('')
-                self._conv_updating = False
-            except Exception:
-                # invalid input - indicate visually
-                try:
-                    self.conv_rgb256.setStyleSheet('border: 2px solid #d9534f;')
-                except Exception:
-                    pass
-                self._conv_updating = False
-
-        def on_hex_changed():
-            if self._conv_updating:
-                return
-            txt = self.conv_hex.text()
-            try:
-                hx = parse_hex_string(txt)
-                self._conv_updating = True
+        # Strict parsers for each source format. Each raises ValueError on any invalid line.
+        def parse_hex_lines(lines):
+            out_hex = []
+            out_rgb256 = []
+            out_rgb01 = []
+            for line in lines:
+                hx = parse_hex_string(line)
+                out_hex.append(hx)
                 r01 = hex_to_rgb01(hx)
-                self.conv_rgb01.setText(format_rgb01_from_tuple(r01))
-                self.conv_rgb256.setText(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
-                self.conv_hex.setText(hx)
-                # Persist converter hex in ini under [ui].converter_hex
-                try:
-                    cfg = configparser.ConfigParser()
-                    if self.config_path.exists():
-                        cfg.read(self.config_path)
-                    if not cfg.has_section('ui'):
-                        cfg.add_section('ui')
-                    cfg.set('ui', 'converter_hex', hx)
-                    with open(self.config_path, 'w', encoding='utf-8') as f:
-                        cfg.write(f)
-                except Exception:
-                    pass
-                # clear validation styling on success
-                self.conv_hex.setStyleSheet('')
-                self.conv_rgb01.setStyleSheet('')
-                self.conv_rgb256.setStyleSheet('')
-                self._conv_updating = False
-            except Exception:
-                # invalid input - indicate visually
-                try:
-                    self.conv_hex.setStyleSheet('border: 2px solid #d9534f;')
-                except Exception:
-                    pass
-                self._conv_updating = False
+                out_rgb01.append(format_rgb01_from_tuple(r01))
+                out_rgb256.append(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
+            return out_hex, out_rgb256, out_rgb01
 
-        # Update only when the user finishes editing (focus out or Enter)
-        self.conv_rgb01.editingFinished.connect(on_rgb01_changed)
-        self.conv_rgb256.editingFinished.connect(on_rgb256_changed)
-        self.conv_hex.editingFinished.connect(on_hex_changed)
+        def parse_rgb256_lines(lines):
+            out_hex = []
+            out_rgb256 = []
+            out_rgb01 = []
+            for line in lines:
+                vals = parse_rgb256_string(line)
+                # ensure each component is in 0-255 (parse_rgb256_string already checks)
+                out_rgb256.append(format_rgb256_from_tuple(vals))
+                r01 = tuple(v/255.0 for v in vals)
+                out_rgb01.append(format_rgb01_from_tuple(r01))
+                out_hex.append(rgb01_to_hex(r01))
+            return out_hex, out_rgb256, out_rgb01
+
+        def parse_rgb01_lines(lines):
+            out_hex = []
+            out_rgb256 = []
+            out_rgb01 = []
+            for line in lines:
+                vals = parse_rgb01_string(line)
+                # ensure floats within [0,1] (parse_rgb01_string checks)
+                out_rgb01.append(format_rgb01_from_tuple(vals))
+                out_rgb256.append(format_rgb256_from_tuple(tuple(int(round(v*255)) for v in vals)))
+                out_hex.append(rgb01_to_hex(vals))
+            return out_hex, out_rgb256, out_rgb01
+
+        def on_convert_from_hex():
+            src = self.conv_hex
+            src.setStyleSheet('')
+            lines = [l.strip() for l in self.conv_hex.toPlainText().splitlines() if l.strip()]
+            try:
+                hexs, r256, r01 = parse_hex_lines(lines)
+            except Exception as e:
+                src.setStyleSheet('border: 2px solid #d9534f;')
+                self.status.showMessage(f'Conversion failed: invalid Hex input. {e}')
+                return
+            # success - clear any error outlines
+            self.conv_hex.setStyleSheet('')
+            self.conv_rgb256.setStyleSheet('')
+            self.conv_rgb01.setStyleSheet('')
+            self.conv_hex.setPlainText('\n'.join(hexs))
+            self.conv_rgb256.setPlainText('\n'.join(r256))
+            self.conv_rgb01.setPlainText('\n'.join(r01))
+            self.status.showMessage(f'Converted {len(hexs)} lines from Hex.')
+
+        def on_convert_from_rgb256():
+            src = self.conv_rgb256
+            src.setStyleSheet('')
+            lines = [l.strip() for l in self.conv_rgb256.toPlainText().splitlines() if l.strip()]
+            try:
+                hexs, r256, r01 = parse_rgb256_lines(lines)
+            except Exception as e:
+                src.setStyleSheet('border: 2px solid #d9534f;')
+                self.status.showMessage(f'Conversion failed: invalid RGB(256) input. {e}')
+                return
+            # success - clear any error outlines
+            self.conv_hex.setStyleSheet('')
+            self.conv_rgb256.setStyleSheet('')
+            self.conv_rgb01.setStyleSheet('')
+            self.conv_hex.setPlainText('\n'.join(hexs))
+            self.conv_rgb256.setPlainText('\n'.join(r256))
+            self.conv_rgb01.setPlainText('\n'.join(r01))
+            self.status.showMessage(f'Converted {len(hexs)} lines from RGB(256).')
+
+        def on_convert_from_rgb01():
+            src = self.conv_rgb01
+            src.setStyleSheet('')
+            lines = [l.strip() for l in self.conv_rgb01.toPlainText().splitlines() if l.strip()]
+            try:
+                hexs, r256, r01 = parse_rgb01_lines(lines)
+            except Exception as e:
+                src.setStyleSheet('border: 2px solid #d9534f;')
+                self.status.showMessage(f'Conversion failed: invalid RGB(0-1) input. {e}')
+                return
+            # Ensure RGB(0-1) output has leading zeros for floats
+            r01_with_leading = []
+            for line in r01:
+                parts = [p.strip() for p in line.split(',')]
+                formatted = []
+                for p in parts:
+                    # normalize float format to have leading zero
+                    try:
+                        fv = float(p)
+                        s = f"{fv:.5f}".rstrip('0').rstrip('.')
+                        if s.startswith('.'):
+                            s = '0' + s
+                        formatted.append(s)
+                    except Exception:
+                        formatted.append(p)
+                r01_with_leading.append(', '.join(formatted))
+
+            # success - clear any error outlines
+            self.conv_hex.setStyleSheet('')
+            self.conv_rgb256.setStyleSheet('')
+            self.conv_rgb01.setStyleSheet('')
+            self.conv_hex.setPlainText('\n'.join(hexs))
+            self.conv_rgb256.setPlainText('\n'.join(r256))
+            self.conv_rgb01.setPlainText('\n'.join(r01_with_leading))
+            self.status.showMessage(f'Converted {len(hexs)} lines from RGB(0-1).')
+
+        # Single Convert button (will act on focused box or first non-empty)
+        btn_convert = QPushButton('Convert')
+        btn_convert.setFixedWidth(120)
+
+        def on_convert_focused():
+            # Try focused widget first
+            fw = QApplication.focusWidget()
+            if fw is self.conv_hex:
+                on_convert_from_hex()
+                return
+            if fw is self.conv_rgb256:
+                on_convert_from_rgb256()
+                return
+            if fw is self.conv_rgb01:
+                on_convert_from_rgb01()
+                return
+            # Otherwise pick the first non-empty box
+            if self.conv_hex.toPlainText().strip():
+                on_convert_from_hex(); return
+            if self.conv_rgb256.toPlainText().strip():
+                on_convert_from_rgb256(); return
+            if self.conv_rgb01.toPlainText().strip():
+                on_convert_from_rgb01(); return
+            # default
+            on_convert_from_hex()
+
+        btn_convert.clicked.connect(on_convert_focused)
+        conv_layout.addWidget(btn_convert, 2, 1, alignment=Qt.AlignCenter)
+
+        # Connect editingFinished signals (Enter/focus-out)
+        self.conv_hex.editingFinished.connect(on_convert_from_hex)
+        self.conv_rgb256.editingFinished.connect(on_convert_from_rgb256)
+        self.conv_rgb01.editingFinished.connect(on_convert_from_rgb01)
 
         main_layout.addLayout(conv_layout)
 
@@ -631,10 +713,11 @@ class MainWindow(QWidget):
                     try:
                         self._conv_updating = True
                         hx = parse_hex_string(ch)
-                        self.conv_hex.setText(hx)
+                        # Put the persisted hex into the Hex box and convert
+                        self.conv_hex.setPlainText(hx)
                         r01 = hex_to_rgb01(hx)
-                        self.conv_rgb01.setText(format_rgb01_from_tuple(r01))
-                        self.conv_rgb256.setText(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
+                        self.conv_rgb01.setPlainText(format_rgb01_from_tuple(r01))
+                        self.conv_rgb256.setPlainText(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
                     except Exception:
                         pass
                     finally:
@@ -651,7 +734,8 @@ class MainWindow(QWidget):
             'format': self.format_combo.currentText(),
             'color_a': self.tile_a.hex,
             'color_b': self.tile_b.hex,
-            'converter_hex': self.conv_hex.text(),
+            # Persist the first line of the Hex converter box for backward compatibility
+            'converter_hex': (self.conv_hex.toPlainText().splitlines()[0].strip() if self.conv_hex.toPlainText().splitlines() else '') ,
         }
         with open(self.config_path, 'w', encoding='utf-8') as f:
             cfg.write(f)
