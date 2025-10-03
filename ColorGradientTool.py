@@ -310,7 +310,7 @@ class MainWindow(QWidget):
         self.setWindowTitle("Color Gradient Tool — coloraide")
         # Set window icon (relative to script folder)
         try:
-            icon_path = Path(__file__).parent / 'color_colors_themes_icon.png'
+            icon_path = Path(__file__).parent / 'images' / 'ColorGradientTool_icon.png'
             if icon_path.exists():
                 ico = QIcon(str(icon_path))
                 self.setWindowIcon(ico)
@@ -728,7 +728,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     # Set application icon (so the OS may use it for the app/window)
     try:
-        icon_path = Path(__file__).parent / 'color_colors_themes_icon.png'
+        icon_path = Path(__file__).parent / 'images' / 'ColorGradientTool_icon.png'
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
     except Exception:
