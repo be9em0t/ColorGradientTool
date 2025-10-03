@@ -2,6 +2,27 @@
 # PyQt6 GUI and application logic for ColorGradientTool
 # Requires: PySide6 and coloraide
 
+# Description: 
+# This is a Color Gradient Tool that allows generating gradients 
+# with different amount of intermediate steps from certain "seed" tiles: 
+# A (left, first), B (right, last) and C (center, only when 3-color mode is active). 
+# The gradients can be generated using different color spaces (sRGB, LAB etc) 
+# and can be represented using different color modes (Hex, RGB etc.). 
+# Finally, we have some limited color mode conversion functionality 
+# useful when a numebr of color values need to be converted between Hex, RGB(0-1) or RGB(256).
+
+# Rules:
+# 1. All values are explicit and can be changed only by stored INI settings, 
+# direct user input and explicit color finction called directly as a result of user input.
+# Never "massage" a value to fit some implicit logic.  
+# 2. Edit the code strictly limited to the user prompt. 
+# Never overachieve the prompt in an effort to cover edge cases or perceived minor improvements. 
+# If such cases arise please ASK THE USER FOR EXLICIT PERMISSION.
+# 3. Minimize code changes and optimize for simplicity. 
+# It's better to be minimal and add code later, when it becomes explicitly necessary, 
+# than to stuff boilerplate code for edge cases that cause hard to track errors.
+
+
 import sys
 import math
 from PySide6.QtWidgets import (
@@ -128,13 +149,7 @@ class ColorTile(QPushButton):
         self.hex = hexcolor
         self.setStyleSheet(f'background: {hexcolor}; border: 1px solid #222;')
 
-    def mousePressEvent(self, e):
-        col = QColorDialog.getColor(QColor(self.hex), self.window(), "Choose color")
-        if col.isValid():
-            hexc = col.name()
-            self.set_color(hexc)
-            self.parent().on_color_changed()
-        super().mousePressEvent(e)
+
 
 
 class MainWindow(QWidget):
@@ -170,12 +185,11 @@ class MainWindow(QWidget):
         self.tile_a = ColorTile(self.color_a)
         self.tile_b = ColorTile(self.color_b)
 
-        # dynamic intermediate preview tiles (default to 5 between A and B => total 7)
+        # dynamic intermediate preview tiles - use INI value ab_count
         self.min_tiles_between = 1  # at least one between? keep semantics: min total tiles = 3 => 1 between
         self.max_tiles_between = 9  # max total tiles = 11 => 9 between
-        self.tiles_between = 5
         self.preview_tiles = []
-        for _ in range(self.tiles_between):
+        for _ in range(self.settings.ab_count):
             lbl = QLabel()
             lbl.setFixedHeight(80)
             lbl.setStyleSheet('background: #777; border: 1px solid #222;')
@@ -531,6 +545,16 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.conv_hex.editingFinished.connect(on_convert_from_hex)
         self.conv_rgb256.editingFinished.connect(on_convert_from_rgb256)
         self.conv_rgb01.editingFinished.connect(on_convert_from_rgb01)
+        
+        # Save converter_hex content when it changes
+        def save_converter_hex():
+            self.settings.converter_hex = self.conv_hex.toPlainText()
+            try:
+                self.settings.save()
+            except Exception:
+                pass
+        
+        self.conv_hex.textChanged.connect(save_converter_hex)
 
         main_layout.addLayout(conv_layout)
 
@@ -558,6 +582,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         except Exception:
             pass
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
+        self.format_combo.currentTextChanged.connect(self.on_format_changed)
         self.copy_button.clicked.connect(self.copy_colors_to_clipboard)
 
         # Store current gradient colors for copying
@@ -573,6 +598,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.settings.color_a = self.tile_a.hex
         self.settings.color_b = self.tile_b.hex
         self.settings.converter_hex = self.conv_hex.toPlainText()
+        self.settings.ab_count = len(self.preview_tiles)
         
         try:
             self.settings.save()
@@ -584,18 +610,46 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         col = QColorDialog.getColor(QColor(self.tile_a.hex), self, "Choose Tile A")
         if col.isValid():
             self.tile_a.set_color(col.name())
+            # Update settings and save immediately
+            self.settings.color_a = self.tile_a.hex
+            try:
+                self.settings.save()
+            except Exception:
+                pass
             self.on_color_changed()
 
     def open_color_b_dialog(self):
         col = QColorDialog.getColor(QColor(self.tile_b.hex), self, "Choose Tile B")
         if col.isValid():
             self.tile_b.set_color(col.name())
+            # Update settings and save immediately
+            self.settings.color_b = self.tile_b.hex
+            try:
+                self.settings.save()
+            except Exception:
+                pass
             self.on_color_changed()
 
     def on_model_changed(self, model=None):
         if model is None:
             model = self.model_combo.currentText()
+        # Update settings and save immediately
+        self.settings.model = self.settings.get_model_key(model)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
         self.on_color_changed()
+
+    def on_format_changed(self, format_type=None):
+        if format_type is None:
+            format_type = self.format_combo.currentText()
+        # Update settings and save immediately
+        self.settings.format = format_type
+        try:
+            self.settings.save()
+        except Exception:
+            pass
 
     def copy_colors_to_clipboard(self):
         """Copy the current gradient colors to clipboard in the selected format"""
@@ -612,18 +666,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         clipboard = QApplication.clipboard()
         clipboard.setText(color_text)
         
-        # Update settings in memory
-        self.settings.model = self.settings.get_model_key(self.model_combo.currentText())
-        self.settings.format = self.format_combo.currentText()
-        self.settings.color_a = self.tile_a.hex
-        self.settings.color_b = self.tile_b.hex
-        self.settings.converter_hex = self.conv_hex.toPlainText()
-        
-        # Save settings now — user pressed Copy which indicates desired settings
-        try:
-            self.settings.save()
-        except Exception:
-            pass
+        # Settings are already saved after each user input, no need to save again here
 
         self.status.showMessage(f"Copied {len(formatted_colors)} colors in {format_type} format to clipboard.")
 
@@ -633,7 +676,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Map the friendly label to the internal key used by interpolate()
         sel = self.model_combo.currentText()
         model = self.settings.get_model_key(sel).lower()
-        # total steps is tile A + tiles_between + tile B
+        # total steps is tile A + ab_count + tile B
         steps = 2 + len(self.preview_tiles)
         try:
             colors = interpolate(a, b, steps, model)
@@ -693,6 +736,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         lbl.setFixedHeight(80)
         lbl.setStyleSheet('background: #777; border: 1px solid #222;')
         self.preview_tiles.append(lbl)
+        # Update settings and save immediately
+        self.settings.ab_count = len(self.preview_tiles)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
         self.rebuild_tiles()
 
     def remove_tile(self):
@@ -703,6 +752,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         lbl = self.preview_tiles.pop()
         try:
             lbl.setParent(None)
+        except Exception:
+            pass
+        # Update settings and save immediately
+        self.settings.ab_count = len(self.preview_tiles)
+        try:
+            self.settings.save()
         except Exception:
             pass
         self.rebuild_tiles()
