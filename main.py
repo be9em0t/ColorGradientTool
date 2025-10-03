@@ -1,13 +1,6 @@
-# color_gradient_tool
+# main.py
+# PyQt6 GUI and application logic for ColorGradientTool
 # Requires: PySide6 and coloraide
-# Generate color gradients in different colorspaces and 
-# copy values in different formats
-
-# ToDO:
-# Edit colors in-place
-# Add more/less swatches
-# Add midpoint color
-# load color swatches into the converter list
 
 import sys
 import math
@@ -17,235 +10,20 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon
 from PySide6.QtCore import Qt, QSize, Signal
-
-# coloraide (required)
-from coloraide import Color
-
-import colorsys
-import configparser
 from pathlib import Path
+
+# Import our modules
+from color import (
+    interpolate, format_color_list, ColorParser, 
+    lerp, parse_hex_string, hex_to_rgb01, rgb01_to_hex,
+    format_rgb01_from_tuple, format_rgb256_from_tuple
+)
+from settings import Settings
 
 # UI spacing constants
 # Gap between color swatches (px). Change this value to adjust spacing.
 SWATCH_GAP = 9
 
-# Utility: proper sRGB <-> linear sRGB conversions (IEC 61966-2-1)
-def srgb_comp_to_linear(c):
-    # c in [0,1]
-    if c <= 0.04045:
-        return c / 12.92
-    else:
-        return ((c + 0.055) / 1.055) ** 2.4
-
-
-def linear_comp_to_srgb(c):
-    # c in [0,1]
-    if c <= 0.0031308:
-        return 12.92 * c
-    else:
-        return 1.055 * (c ** (1 / 2.4)) - 0.055
-
-
-def hex_to_rgb01(hexstr):
-    hexstr = hexstr.lstrip('#')
-    r = int(hexstr[0:2], 16) / 255.0
-    g = int(hexstr[2:4], 16) / 255.0
-    b = int(hexstr[4:6], 16) / 255.0
-    return (r, g, b)
-
-
-def rgb01_to_hex(rgb):
-    r, g, b = rgb
-    return '#{:02x}{:02x}{:02x}'.format(
-        max(0, min(255, int(round(r * 255)))),
-        max(0, min(255, int(round(g * 255)))),
-        max(0, min(255, int(round(b * 255))))
-    )
-
-
-def lerp(a, b, t):
-    return a + (b - a) * t
-
-
-def shortest_angle_interp(a1, a2, t):
-    # a1, a2 in degrees [0, 360)
-    d = ((a2 - a1 + 180) % 360) - 180
-    return (a1 + d * t) % 360
-
-
-def hex_to_rgb256(hex_color):
-    """Convert hex color to RGB 256 format (0-255)"""
-    hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    return f"rgb({r}, {g}, {b})"
-
-
-def parse_rgb01_string(s):
-    """Parse '0.123, 0.234, 0.345' or '.12, .23, 1' into (r,g,b) floats 0-1"""
-    parts = [p.strip() for p in s.split(',')]
-    if len(parts) != 3:
-        raise ValueError('Expected three components')
-    vals = []
-    for p in parts:
-        if p == '':
-            raise ValueError('Empty component')
-        v = float(p)
-        if not (0.0 <= v <= 1.0):
-            raise ValueError('Component out of range')
-        vals.append(v)
-    return tuple(vals)
-
-
-def parse_rgb256_string(s):
-    """Parse '0, 24, 255' into (r,g,b) ints 0-255"""
-    parts = [p.strip() for p in s.split(',')]
-    if len(parts) != 3:
-        raise ValueError('Expected three components')
-    vals = []
-    for p in parts:
-        if p == '':
-            raise ValueError('Empty component')
-        v = int(p)
-        if not (0 <= v <= 255):
-            raise ValueError('Component out of range')
-        vals.append(v)
-    return tuple(vals)
-
-
-def parse_hex_string(s):
-    """Parse hex like '#F8F623' or 'F8F623' into normalized '#rrggbb' lowercase"""
-    h = s.strip().lstrip('#')
-    if len(h) == 3:
-        # expand shorthand
-        h = ''.join(c*2 for c in h)
-    if len(h) != 6:
-        raise ValueError('Hex must be 6 digits')
-    int(h, 16)  # validate
-    return '#' + h.lower()
-
-
-def format_rgb01_from_tuple(t):
-    # format numbers with up to 5 decimals, strip trailing zeros, drop leading zero
-    def fmt(v):
-        # Keep a leading zero for values like 0.335 (do not drop the leading 0)
-        s = f"{v:.5f}".rstrip('0').rstrip('.')
-        return s
-    return ', '.join(fmt(x) for x in t)
-
-
-def format_rgb256_from_tuple(t):
-    return ', '.join(str(int(x)) for x in t)
-
-
-def hex_to_rgb01_string(hex_color):
-    """Convert hex color to RGB 0-1 format string"""
-    hex_color = hex_color.lstrip('#')
-    r = int(hex_color[0:2], 16) / 255.0
-    g = int(hex_color[2:4], 16) / 255.0
-    b = int(hex_color[4:6], 16) / 255.0
-    return f"rgb({r:.3f}, {g:.3f}, {b:.3f})"
-
-
-def format_color_list(colors, format_type):
-    """Convert a list of hex colors to the specified format"""
-    if format_type == "Hex":
-        return colors
-    elif format_type == "RGB 256":
-        return [hex_to_rgb256(color) for color in colors]
-    elif format_type == "RGB 0-1":
-        return [hex_to_rgb01_string(color) for color in colors]
-    else:
-        return colors
-
-
-CYLINDRICAL_SPACES = {'lch', 'oklch', 'hsl', 'hwb', 'hsv'}
-
-
-def interpolate_coloraide(hex_a, hex_b, steps, space):
-    """
-    General-purpose interpolation using coloraide.
-    space: e.g. 'oklch', 'oklab', 'lch', 'lab', 'hsl', 'hwb', 'srgb'
-    Returns list of hex strings length == steps
-    """
-    ca = Color(hex_a)
-    cb = Color(hex_b)
-    # Convert endpoints into desired space
-    a_conv = ca.convert(space)
-    b_conv = cb.convert(space)
-
-    a_coords = list(a_conv.coords())
-    b_coords = list(b_conv.coords())
-
-    out = []
-    is_cyl = space.lower() in CYLINDRICAL_SPACES
-    hue_index = (len(a_coords) - 1) if is_cyl else None
-
-    for i in range(steps):
-        t = i / (steps - 1) if steps > 1 else 0
-        coords = []
-        for j in range(len(a_coords)):
-            if j == hue_index:
-                a_h = (a_coords[j] % 360)
-                b_h = (b_coords[j] % 360)
-                h = shortest_angle_interp(a_h, b_h, t)
-                coords.append(h)
-            else:
-                coords.append(lerp(a_coords[j], b_coords[j], t))
-        try:
-            c = Color(space, coords)
-            # Fit to sRGB if out of gamut for display
-            if not c.in_gamut('srgb'):
-                c = c.fit('srgb')
-            hex_out = c.convert('srgb').to_string(hex=True)
-            out.append(hex_out)
-        except Exception:
-            # fallback to endpoints if something fails
-            out.append(hex_a if t < 0.5 else hex_b)
-    return out
-
-
-def interpolate_srgb_linear(hex_a, hex_b, steps):
-    """
-    Interpolate in linear sRGB space (physically additive) using correct sRGB linearization.
-    """
-    ar, ag, ab = hex_to_rgb01(hex_a)
-    br, bg, bb = hex_to_rgb01(hex_b)
-    la = (srgb_comp_to_linear(ar), srgb_comp_to_linear(ag), srgb_comp_to_linear(ab))
-    lb = (srgb_comp_to_linear(br), srgb_comp_to_linear(bg), srgb_comp_to_linear(bb))
-    out = []
-    for i in range(steps):
-        t = i / (steps - 1) if steps > 1 else 0
-        lr = lerp(la[0], lb[0], t)
-        lg = lerp(la[1], lb[1], t)
-        lbv = lerp(la[2], lb[2], t)
-        r = linear_comp_to_srgb(lr)
-        g = linear_comp_to_srgb(lg)
-        b = linear_comp_to_srgb(lbv)
-        out.append(rgb01_to_hex((r, g, b)))
-    return out
-
-
-def interpolate(hex_a, hex_b, steps, mode):
-    m = mode.lower()
-    if m == 'srgb' or m == 'rgb':
-        return interpolate_srgb_linear(hex_a, hex_b, steps)
-    # For everything else use coloraide's conversions and fitting
-    # Map friendly names to coloraide spaces
-    mapping = {
-        'oklch': 'oklch',
-        'oklab': 'oklab',
-        'lch': 'lch',
-        'lab': 'lab',
-        'hsl': 'hsl',
-        'hwb': 'hwb',
-    }
-    space = mapping.get(m, m)
-    return interpolate_coloraide(hex_a, hex_b, steps, space)
-
-
-# -------------------- Qt UI --------------------
 
 class GradientPreview(QLabel):
     def __init__(self, parent=None):
@@ -293,6 +71,7 @@ class GradientPreview(QLabel):
 class MultilineEdit(QTextEdit):
     """QTextEdit that emits editingFinished on focus out, Ctrl+Enter, or Enter when single-line."""
     editingFinished = Signal()
+    
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # Avoid accepting rich text from clipboard sources
@@ -362,19 +141,26 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Color Gradient Tool — coloraide")
+        
         # Set window icon (relative to script folder)
         try:
-            icon_path = Path(__file__).parent / 'images' / 'ColorGradientTool_icon.png'
+            icon_path = Path(__file__).parent / 'resources' / 'ColorGradientTool_icon.png'
             if icon_path.exists():
                 ico = QIcon(str(icon_path))
                 self.setWindowIcon(ico)
         except Exception:
             pass
+        
         self.setMinimumSize(980, 560)
 
-        # Default colors
-        self.color_a = '#e31b23'  # bright red
-        self.color_b = '#00b0e6'  # cyan-ish
+        # Initialize settings
+        config_path = Path(__file__).parent / 'ColorGradient.ini'
+        self.settings = Settings(config_path)
+        self.settings.load()
+
+        # Default colors from settings
+        self.color_a = self.settings.color_a
+        self.color_b = self.settings.color_b
 
         title = QLabel("Color Gradient Tool")
         title.setStyleSheet("font-size: 28px; font-weight: 600; color: #ffffff;")
@@ -412,21 +198,15 @@ class MainWindow(QWidget):
 
         # Color model selector (friendly labels shown; use mapping to internal keys)
         self.model_combo = QComboBox()
-        # Friendly label -> internal key
-        self.model_label_to_key = {
-            'OKLCH (OKLab LCh)': 'oklch',
-            'LCh (CIE LCh)': 'lch',
-            'OKLab': 'oklab',
-            'CIE Lab': 'lab',
-            'HWB (Hue‑Whiteness‑Blackness)': 'hwb',
-            'HSL (Hue‑Saturation‑Lightness)': 'hsl',
-            'sRGB': 'srgb',
-        }
-        for label in self.model_label_to_key.keys():
+        model_mappings = self.settings.get_model_mappings()
+        for label in model_mappings.keys():
             self.model_combo.addItem(label)
-        # Keep the visible selection friendly but default to OKLCH
-        self.model_combo.setCurrentText('OKLCH (OKLab LCh)')
+        
+        # Set current model from settings
+        current_label = self.settings.get_model_label(self.settings.model)
+        self.model_combo.setCurrentText(current_label)
         self.model_combo.setFixedWidth(260)
+        
         # Apply same styling as the format selector so controls look consistent
         self.model_combo.setStyleSheet("""
             QComboBox {
@@ -443,7 +223,7 @@ class MainWindow(QWidget):
         formats = ['Hex', 'RGB 256', 'RGB 0-1']
         for f in formats:
             self.format_combo.addItem(f)
-        self.format_combo.setCurrentText('Hex')
+        self.format_combo.setCurrentText(self.settings.format)
         self.format_combo.setFixedWidth(120)
         self.format_combo.setStyleSheet("""
             QComboBox {
@@ -618,56 +398,22 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         conv_layout.addWidget(lbl_rgb01, 0, 2)
 
         conv_layout.addWidget(self.conv_hex, 1, 0)
-        conv_layout.addWidget(self.conv_rgb256, 1, 1)
+        conv_layout.addWidget(self.conv_rgb256, 1, 1)  
         conv_layout.addWidget(self.conv_rgb01, 1, 2)
 
-        # Initialize converter hex to tile A by default; load_config() will override if INI has a value
-        self.conv_hex.setPlainText(self.tile_a.hex)
+        # Initialize converter hex from settings or default to tile A
+        if self.settings.converter_hex:
+            self.conv_hex.setPlainText(self.settings.converter_hex)
+        else:
+            self.conv_hex.setPlainText(self.tile_a.hex)
 
-        # Strict parsers for each source format. Each raises ValueError on any invalid line.
-        def parse_hex_lines(lines):
-            out_hex = []
-            out_rgb256 = []
-            out_rgb01 = []
-            for line in lines:
-                hx = parse_hex_string(line)
-                out_hex.append(hx)
-                r01 = hex_to_rgb01(hx)
-                out_rgb01.append(format_rgb01_from_tuple(r01))
-                out_rgb256.append(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
-            return out_hex, out_rgb256, out_rgb01
-
-        def parse_rgb256_lines(lines):
-            out_hex = []
-            out_rgb256 = []
-            out_rgb01 = []
-            for line in lines:
-                vals = parse_rgb256_string(line)
-                # ensure each component is in 0-255 (parse_rgb256_string already checks)
-                out_rgb256.append(format_rgb256_from_tuple(vals))
-                r01 = tuple(v/255.0 for v in vals)
-                out_rgb01.append(format_rgb01_from_tuple(r01))
-                out_hex.append(rgb01_to_hex(r01))
-            return out_hex, out_rgb256, out_rgb01
-
-        def parse_rgb01_lines(lines):
-            out_hex = []
-            out_rgb256 = []
-            out_rgb01 = []
-            for line in lines:
-                vals = parse_rgb01_string(line)
-                # ensure floats within [0,1] (parse_rgb01_string checks)
-                out_rgb01.append(format_rgb01_from_tuple(vals))
-                out_rgb256.append(format_rgb256_from_tuple(tuple(int(round(v*255)) for v in vals)))
-                out_hex.append(rgb01_to_hex(vals))
-            return out_hex, out_rgb256, out_rgb01
-
+        # Conversion handlers
         def on_convert_from_hex():
             src = self.conv_hex
             src.setStyleSheet('')
             lines = [l.strip() for l in self.conv_hex.toPlainText().splitlines() if l.strip()]
             try:
-                hexs, r256, r01 = parse_hex_lines(lines)
+                hexs, r256, r01 = ColorParser.parse_hex_lines(lines)
             except Exception as e:
                 src.setStyleSheet('border: 2px solid #d9534f;')
                 self.status.showMessage(f'Conversion failed: invalid Hex input. {e}')
@@ -682,11 +428,11 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.status.showMessage(f'Converted {len(hexs)} lines from Hex.')
 
         def on_convert_from_rgb256():
-            src = self.conv_rgb256
+            src = self.conv_rgb256 
             src.setStyleSheet('')
             lines = [l.strip() for l in self.conv_rgb256.toPlainText().splitlines() if l.strip()]
             try:
-                hexs, r256, r01 = parse_rgb256_lines(lines)
+                hexs, r256, r01 = ColorParser.parse_rgb256_lines(lines)
             except Exception as e:
                 src.setStyleSheet('border: 2px solid #d9534f;')
                 self.status.showMessage(f'Conversion failed: invalid RGB(256) input. {e}')
@@ -705,7 +451,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             src.setStyleSheet('')
             lines = [l.strip() for l in self.conv_rgb01.toPlainText().splitlines() if l.strip()]
             try:
-                hexs, r256, r01 = parse_rgb01_lines(lines)
+                hexs, r256, r01 = ColorParser.parse_rgb01_lines(lines)
             except Exception as e:
                 src.setStyleSheet('border: 2px solid #d9534f;')
                 self.status.showMessage(f'Conversion failed: invalid RGB(0-1) input. {e}')
@@ -802,12 +548,6 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
 
         self.setLayout(main_layout)
 
-        # config file path (use explicit filename ColorGradient.ini for consistency)
-        self.config_path = Path(__file__).parent / 'ColorGradient.ini'
-
-        # Load previous settings if present
-        self.load_config()
-
         # signals
         self.tile_a.clicked.connect(self.open_color_a_dialog)
         self.tile_b.clicked.connect(self.open_color_b_dialog)
@@ -827,79 +567,18 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.on_color_changed()
 
     def closeEvent(self, event):
-        # Save settings when window is closed
+        # Update settings from current UI state and save
+        self.settings.model = self.settings.get_model_key(self.model_combo.currentText())
+        self.settings.format = self.format_combo.currentText()
+        self.settings.color_a = self.tile_a.hex
+        self.settings.color_b = self.tile_b.hex
+        self.settings.converter_hex = self.conv_hex.toPlainText()
+        
         try:
-            self.save_config()
+            self.settings.save()
         except Exception:
             pass
         super().closeEvent(event)
-
-    def load_config(self):
-        """Load last-used settings from ColorGradient.ini"""
-        cfg = configparser.ConfigParser()
-        if not self.config_path.exists():
-            return
-        try:
-            cfg.read(self.config_path)
-            if cfg.has_section('ui'):
-                model = cfg.get('ui', 'model', fallback=None)
-                fmt = cfg.get('ui', 'format', fallback=None)
-                a = cfg.get('ui', 'color_a', fallback=None)
-                b = cfg.get('ui', 'color_b', fallback=None)
-                ch = cfg.get('ui', 'converter_hex', fallback=None)
-                # model in config may be either a friendly label or an internal key
-                available_labels = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
-                if model:
-                    # If model matches an internal key, map it to the friendly label
-                    if model.lower() in self.model_label_to_key.values():
-                        # find the label for this key
-                        for lab, key in self.model_label_to_key.items():
-                            if key == model.lower():
-                                self.model_combo.setCurrentText(lab)
-                                break
-                    elif model in available_labels:
-                        self.model_combo.setCurrentText(model)
-                if fmt and fmt in [self.format_combo.itemText(i) for i in range(self.format_combo.count())]:
-                    self.format_combo.setCurrentText(fmt)
-                if a:
-                    self.tile_a.set_color(a)
-                if b:
-                    self.tile_b.set_color(b)
-                # Apply converter_hex if present (avoid triggering handlers)
-                if ch:
-                    try:
-                        self._conv_updating = True
-                        # Decode escaped newlines stored in the INI and restore the Hex box
-                        decoded = ch.replace('\\n', '\n')
-                        self.conv_hex.setPlainText(decoded)
-                        # Trigger the usual conversion handler for the Hex box
-                        try:
-                            self.conv_hex.editingFinished.emit()
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
-                    finally:
-                        self._conv_updating = False
-        except Exception:
-            # ignore config errors
-            return
-
-    def save_config(self):
-        """Save current settings to ColorGradient.ini"""
-        cfg = configparser.ConfigParser()
-        cfg['ui'] = {
-            # Persist the internal key for the model (but keep friendly label in the UI)
-            'model': self.model_label_to_key.get(self.model_combo.currentText(), self.model_combo.currentText()),
-            'format': self.format_combo.currentText(),
-            'color_a': self.tile_a.hex,
-            'color_b': self.tile_b.hex,
-            # Persist the full contents of the Hex converter box (multi-line)
-            # Encode newlines as '\\n' so configparser writes a single-line value reliably
-            'converter_hex': self.conv_hex.toPlainText().replace('\n', '\\n'),
-        }
-        with open(self.config_path, 'w', encoding='utf-8') as f:
-            cfg.write(f)
 
     def open_color_a_dialog(self):
         col = QColorDialog.getColor(QColor(self.tile_a.hex), self, "Choose Tile A")
@@ -933,9 +612,16 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         clipboard = QApplication.clipboard()
         clipboard.setText(color_text)
         
+        # Update settings in memory
+        self.settings.model = self.settings.get_model_key(self.model_combo.currentText())
+        self.settings.format = self.format_combo.currentText()
+        self.settings.color_a = self.tile_a.hex
+        self.settings.color_b = self.tile_b.hex
+        self.settings.converter_hex = self.conv_hex.toPlainText()
+        
         # Save settings now — user pressed Copy which indicates desired settings
         try:
-            self.save_config()
+            self.settings.save()
         except Exception:
             pass
 
@@ -946,14 +632,14 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         b = self.tile_b.hex
         # Map the friendly label to the internal key used by interpolate()
         sel = self.model_combo.currentText()
-        model = self.model_label_to_key.get(sel, sel).lower()
+        model = self.settings.get_model_key(sel).lower()
         # total steps is tile A + tiles_between + tile B
         steps = 2 + len(self.preview_tiles)
         try:
             colors = interpolate(a, b, steps, model)
         except Exception as ex:
             self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
-            colors = interpolate_srgb_linear(a, b, steps)
+            colors = interpolate(a, b, steps, 'srgb')
 
         # Store colors for copying
         self.current_colors = colors
@@ -1026,7 +712,7 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     # Set application icon (so the OS may use it for the app/window)
     try:
-        icon_path = Path(__file__).parent / 'images' / 'ColorGradientTool_icon.png'
+        icon_path = Path(__file__).parent / 'resources' / 'ColorGradientTool_icon.png'
         if icon_path.exists():
             app.setWindowIcon(QIcon(str(icon_path)))
     except Exception:
