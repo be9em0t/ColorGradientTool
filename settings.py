@@ -23,6 +23,9 @@ class Settings:
         self.ab_count = 3
         self.ac_count = 2
         self.cb_count = 2
+        self.swatch_gap = 9
+        self.master_tile_border_color = '#E3E3E3'
+        self.tile_border_radius = 6
         
         # Model mappings for friendly labels
         self.model_label_to_key = {
@@ -54,6 +57,9 @@ class Settings:
                 self.ab_count = cfg.getint('ui', 'ab_count', fallback=self.ab_count)
                 self.ac_count = cfg.getint('ui', 'ac_count', fallback=self.ac_count)
                 self.cb_count = cfg.getint('ui', 'cb_count', fallback=self.cb_count)
+                self.swatch_gap = cfg.getint('ui', 'swatch_gap', fallback=self.swatch_gap)
+                self.master_tile_border_color = cfg.get('ui', 'master_tile_border_color', fallback=self.master_tile_border_color)
+                self.tile_border_radius = cfg.getint('ui', 'tile_border_radius', fallback=self.tile_border_radius)
                 
                 # Decode escaped newlines stored in the INI
                 if converter_hex:
@@ -77,6 +83,9 @@ class Settings:
             'ab_count': str(self.ab_count),
             'ac_count': str(self.ac_count),
             'cb_count': str(self.cb_count),
+            'swatch_gap': str(self.swatch_gap),
+            'master_tile_border_color': self.master_tile_border_color,
+            'tile_border_radius': str(self.tile_border_radius),
         }
         
         with open(self.config_path, 'w', encoding='utf-8') as f:

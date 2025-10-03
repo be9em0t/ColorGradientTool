@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QColorDialog,
     QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit
 )
-from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon
+from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QPainterPath
 from PySide6.QtCore import Qt, QSize, Signal
 from pathlib import Path
 
@@ -41,18 +41,19 @@ from color import (
 )
 from settings import Settings
 
-# UI spacing constants
-# Gap between color swatches (px). Change this value to adjust spacing.
-SWATCH_GAP = 9
+# UI spacing constants moved to INI settings
 
 
 class GradientPreview(QLabel):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, border_radius=4):
         super().__init__(parent)
         # Match the height of the color swatches (80 px)
         self.setFixedHeight(80)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._colors = ['#ff0000', '#0000ff']
+        self.border_radius = border_radius
+        # Apply rounded corners styling
+        self.setStyleSheet(f'border-radius: {self.border_radius}px;')
 
     def set_colors(self, colors):
         self._colors = colors
@@ -63,7 +64,16 @@ class GradientPreview(QLabel):
         # Use the widget's actual height (fixed to match swatches)
         h = max(1, self.height())
         pix = QPixmap(w, h)
+        pix.fill(Qt.transparent)  # Start with transparent background
         painter = QPainter(pix)
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Create rounded rectangle path
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, w, h, self.border_radius, self.border_radius)
+        painter.setClipPath(path)
+        
+        # Draw gradient within the clipped rounded rectangle
         img = pix.toImage()
         steps = len(self._colors)
         stops_rgb = [QColor(c).getRgb() for c in self._colors]
@@ -139,15 +149,29 @@ class MultilineEdit(QTextEdit):
 
 
 class ColorTile(QPushButton):
-    def __init__(self, hexcolor, size=(140, 80)):
+    def __init__(self, hexcolor, size=(140, 80), is_master=False, master_border_color='#808080', border_radius=4):
         super().__init__()
         self.hex = hexcolor
+        self.is_master = is_master
+        self.master_border_color = master_border_color
+        self.border_radius = border_radius
         self.setFixedSize(QSize(*size))
-        self.setStyleSheet(f'background: {hexcolor}; border: 1px solid #222;')
+        self._update_style()
 
     def set_color(self, hexcolor):
         self.hex = hexcolor
-        self.setStyleSheet(f'background: {hexcolor}; border: 1px solid #222;')
+        self._update_style()
+    
+    def set_size(self, width, height):
+        self.setFixedSize(QSize(width, height))
+    
+    def _update_style(self):
+        if self.is_master:
+            # Master tiles get an inner border
+            self.setStyleSheet(f'background: {self.hex}; border: 2px solid {self.master_border_color}; border-radius: {self.border_radius}px;')
+        else:
+            # Regular preview tiles
+            self.setStyleSheet(f'background: {self.hex}; border: 1px solid #222; border-radius: {self.border_radius}px;')
 
 
 
@@ -181,9 +205,9 @@ class MainWindow(QWidget):
         title.setStyleSheet("font-size: 28px; font-weight: 600; color: #ffffff;")
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Tiles row
-        self.tile_a = ColorTile(self.color_a)
-        self.tile_b = ColorTile(self.color_b)
+        # Tiles row - master tiles with border
+        self.tile_a = ColorTile(self.color_a, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
+        self.tile_b = ColorTile(self.color_b, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
 
         # dynamic intermediate preview tiles - use INI value ab_count
         self.min_tiles_between = 1  # at least one between? keep semantics: min total tiles = 3 => 1 between
@@ -191,8 +215,9 @@ class MainWindow(QWidget):
         self.preview_tiles = []
         for _ in range(self.settings.ab_count):
             lbl = QLabel()
-            lbl.setFixedHeight(80)
-            lbl.setStyleSheet('background: #777; border: 1px solid #222;')
+            lbl.setFixedSize(80, 80)  # Initial size, will be updated by update_tile_sizes()
+            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.preview_tiles.append(lbl)
 
         # Add/remove link-like labels (styled) centered between the Tile A and Tile B labels
@@ -269,7 +294,7 @@ class MainWindow(QWidget):
         """)
 
         # Gradient preview
-        self.gradient_preview = GradientPreview()
+        self.gradient_preview = GradientPreview(border_radius=self.settings.tile_border_radius)
 
         # Layout
         main_layout = QVBoxLayout()
@@ -291,10 +316,10 @@ class MainWindow(QWidget):
         top_grid.addWidget(label_b, 0, 2, alignment=Qt.AlignRight)
 
         tiles_layout = QHBoxLayout()
-        tiles_layout.setSpacing(SWATCH_GAP)
+        tiles_layout.setSpacing(self.settings.swatch_gap)
         # We'll create a container layout that we can rebuild when the number of tiles changes
         self.tiles_container = QHBoxLayout()
-        self.tiles_container.setSpacing(SWATCH_GAP)
+        self.tiles_container.setSpacing(self.settings.swatch_gap)
         # initial population
         self.tiles_container.addWidget(self.tile_a)
         for t in self.preview_tiles:
@@ -589,7 +614,34 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.current_colors = []
 
         # initial render
+        self.update_tile_sizes()
         self.on_color_changed()
+
+    def update_tile_sizes(self):
+        """Calculate and update tile widths to maintain uniform appearance"""
+        # Get current window width (use minimum width if not yet shown)
+        available_width = max(self.width(), self.minimumWidth()) - 40  # account for margins
+        
+        # Calculate total tiles and gaps
+        total_tiles = 2 + len(self.preview_tiles)  # A + preview_tiles + B
+        total_gaps = (total_tiles - 1) * self.settings.swatch_gap
+        
+        # Calculate tile width
+        tile_width = max(80, (available_width - total_gaps) // total_tiles)  # minimum 80px width
+        tile_height = 80
+        
+        # Update master tiles
+        self.tile_a.set_size(tile_width, tile_height)
+        self.tile_b.set_size(tile_width, tile_height)
+        
+        # Update preview tiles (they are QLabels, need different approach)
+        for lbl in self.preview_tiles:
+            lbl.setFixedSize(tile_width, tile_height)
+
+    def resizeEvent(self, event):
+        """Update tile sizes when window is resized"""
+        super().resizeEvent(event)
+        self.update_tile_sizes()
 
     def closeEvent(self, event):
         # Update settings from current UI state and save
@@ -689,7 +741,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
 
         # update preview tiles (dynamic)
         for i, lbl in enumerate(self.preview_tiles):
-            lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222;')
+            lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
 
         # update tile A and B (in case fitted to gamut changed them)
         self.tile_a.set_color(colors[0])
@@ -717,12 +769,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Re-add in order
         self.tiles_container.addWidget(self.tile_a)
         for lbl in self.preview_tiles:
-            # ensure label has the right fixed size
-            lbl.setFixedHeight(80)
-            # compute a width that will allow them to scale when window resizes by using expanding policy
-            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            # Preview tiles use fixed size policy for uniform appearance
+            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             self.tiles_container.addWidget(lbl)
         self.tiles_container.addWidget(self.tile_b)
+        # Update tile sizes and spacing
+        self.update_tile_sizes()
         # Trigger layout update
         self.updateGeometry()
         self.on_color_changed()
@@ -733,8 +785,9 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.status.showMessage('Already at maximum of 11 tiles.')
             return
         lbl = QLabel()
-        lbl.setFixedHeight(80)
-        lbl.setStyleSheet('background: #777; border: 1px solid #222;')
+        lbl.setFixedSize(80, 80)  # Initial size, will be updated by update_tile_sizes()
+        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         self.preview_tiles.append(lbl)
         # Update settings and save immediately
         self.settings.ab_count = len(self.preview_tiles)
