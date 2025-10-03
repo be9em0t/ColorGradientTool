@@ -288,6 +288,13 @@ class GradientPreview(QLabel):
 class MultilineEdit(QTextEdit):
     """QTextEdit that emits editingFinished on focus out, Ctrl+Enter, or Enter when single-line."""
     editingFinished = Signal()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Avoid accepting rich text from clipboard sources
+        try:
+            self.setAcceptRichText(False)
+        except Exception:
+            pass
 
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
@@ -315,6 +322,15 @@ class MultilineEdit(QTextEdit):
                     pass
                 return
         super().keyPressEvent(event)
+
+    def insertFromMimeData(self, source):
+        # Ensure pasted content is treated as plain text (strip formatting)
+        try:
+            text = source.text()
+            self.insertPlainText(text)
+        except Exception:
+            # Fallback to default behavior
+            super().insertFromMimeData(source)
 
 
 class ColorTile(QPushButton):
@@ -369,12 +385,22 @@ class MainWindow(QWidget):
             lbl.setFixedSize(140, 80)
             lbl.setStyleSheet('background: #777; border: 1px solid #222;')
 
-        # Color model selector (matching your screenshot options)
+        # Color model selector (friendly labels shown; use mapping to internal keys)
         self.model_combo = QComboBox()
-        models = ['OKLCH', 'HSL', 'LAB', 'HWB', 'sRGB', 'OKLAB', 'LCH']
-        for m in models:
-            self.model_combo.addItem(m)
-        self.model_combo.setCurrentText('OKLCH')
+        # Friendly label -> internal key
+        self.model_label_to_key = {
+            'OKLCH (OKLab LCh)': 'oklch',
+            'LCh (CIE LCh)': 'lch',
+            'OKLab': 'oklab',
+            'CIE Lab': 'lab',
+            'HWB (Hue‑Whiteness‑Blackness)': 'hwb',
+            'HSL (Hue‑Saturation‑Lightness)': 'hsl',
+            'sRGB': 'srgb',
+        }
+        for label in self.model_label_to_key.keys():
+            self.model_combo.addItem(label)
+        # Keep the visible selection friendly but default to OKLCH
+        self.model_combo.setCurrentText('OKLCH (OKLab LCh)')
         self.model_combo.setFixedWidth(260)
         # Apply same styling as the format selector so controls look consistent
         self.model_combo.setStyleSheet("""
@@ -405,7 +431,7 @@ class MainWindow(QWidget):
         """)
 
         # Copy button
-        self.copy_button = QPushButton('Copy Colors')
+        self.copy_button = QPushButton('Copy colors')
         self.copy_button.setFixedWidth(120)
         self.copy_button.setStyleSheet("""
             QPushButton {
@@ -429,11 +455,14 @@ class MainWindow(QWidget):
         # Layout
         main_layout = QVBoxLayout()
         main_layout.setSpacing(18)
-        main_layout.setContentsMargins(20, 20, 20, 20)
+        # Reduce bottom margin slightly (was 20) to tighten space below status bar
+        main_layout.setContentsMargins(20, 20, 20, 10)
         main_layout.addWidget(title)
 
         top_grid = QGridLayout()
         top_grid.setHorizontalSpacing(20)
+        # Reduce vertical gap between label row and tiles
+        top_grid.setVerticalSpacing(6)
         # Labels for the edge tiles
         label_a = QLabel("Tile A")
         label_a.setStyleSheet('color: #eaeff2;')
@@ -457,10 +486,44 @@ class MainWindow(QWidget):
         # Labels above the selectors
         label_space = QLabel("Color space")
         label_space.setStyleSheet('color: #eaeff2;')
+        # Help icon next to Color space (use simple text '[?]' for cross-platform reliability)
+        help_icon = QLabel('[?]')
+        help_icon.setStyleSheet('color: #4588C4; font-size: 13px; padding-left: 6px;')
+        help_icon.setToolTip(
+            """
+<b>Color space descriptions</b><br><br>
+OKLCH — OKLCH (OKLab LCh) — Perceptual Lightness‑Chroma‑Hue (based on the OKLab color space; good for perceptual interpolation)<br><br>
+OKLab — OKLab — Perceptual L‑a‑b color space (lightness and two opponent axes; designed for more uniform perceived differences)<br><br>
+LCh — LCh (CIE LCh / LCh(ab)) — Lightness‑Chroma‑Hue (cylindrical form of CIE Lab*; useful for intuitive hue/chroma edits)<br><br>
+Lab — CIE Lab* (Lab) — Lightness and two color opponent channels (device‑independent, perceptually oriented)<br><br>
+HWB — HWB — Hue‑Whiteness‑Blackness (simple paint‑like model: mix hue with white and black; intuitive for designers)<br><br>
+HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for adjusting hue and perceived lightness)
+"""
+        )
+        # Also make clicking it open a QMessageBox with the same content for accessibility
+        def show_help():
+            from PySide6.QtWidgets import QMessageBox
+            msg = QMessageBox(self)
+            msg.setWindowTitle('Color space help')
+            msg.setTextFormat(Qt.RichText)
+            msg.setText(help_icon.toolTip())
+            msg.exec()
+        try:
+            help_icon.mousePressEvent = lambda e: show_help()
+        except Exception:
+            pass
         label_format = QLabel("Color format")
         label_format.setStyleSheet('color: #eaeff2;')
 
-        controls_layout.addWidget(label_space, 0, 0, alignment=Qt.AlignLeft)
+        # Place the label and help icon together
+        hl = QHBoxLayout()
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(0)
+        hl.addWidget(label_space)
+        hl.addWidget(help_icon)
+        helper_widget = QWidget()
+        helper_widget.setLayout(hl)
+        controls_layout.addWidget(helper_widget, 0, 0, alignment=Qt.AlignLeft)
         controls_layout.addWidget(label_format, 0, 1, alignment=Qt.AlignLeft)
 
         # Controls row
@@ -476,12 +539,16 @@ class MainWindow(QWidget):
 
         # gradient preview
         gl = QVBoxLayout()
+        # tighten spacing so the label sits closer to the preview
+        gl.setSpacing(6)
         gl.addWidget(QLabel("Gradient preview"))
         gl.addWidget(self.gradient_preview)
         main_layout.addLayout(gl)
 
         # --- Color format converter fields (independent utility) ---
         conv_layout = QGridLayout()
+        # tighten vertical spacing so converter labels sit closer to boxes
+        conv_layout.setVerticalSpacing(6)
         # Converter area: three multiline boxes for Hex, RGB(256), RGB(0-1)
         lbl_hex = QLabel('Hex')
         lbl_hex.setStyleSheet('color: #eaeff2;')
@@ -493,6 +560,13 @@ class MainWindow(QWidget):
         self.conv_hex = MultilineEdit()
         self.conv_rgb256 = MultilineEdit()
         self.conv_rgb01 = MultilineEdit()
+        # Limit box height to ~4 lines so scrollbar appears for longer lists
+        fm = self.conv_hex.fontMetrics()
+        line_h = fm.lineSpacing()
+        max_h = line_h * 4 + 10
+        self.conv_hex.setMaximumHeight(max_h)
+        self.conv_rgb256.setMaximumHeight(max_h)
+        self.conv_rgb01.setMaximumHeight(max_h)
 
         # Layout labels above the respective boxes
         conv_layout.addWidget(lbl_hex, 0, 0)
@@ -619,8 +693,24 @@ class MainWindow(QWidget):
             self.status.showMessage(f'Converted {len(hexs)} lines from RGB(0-1).')
 
         # Single Convert button (will act on focused box or first non-empty)
-        btn_convert = QPushButton('Convert')
+        btn_convert = QPushButton('Convert colors')
         btn_convert.setFixedWidth(120)
+        # Match styling of the existing Copy Colors button
+        btn_convert.setStyleSheet("""
+            QPushButton {
+                background-color: #3a4a56;
+                border: 1px solid #555;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #eaeff2;
+            }
+            QPushButton:hover {
+                background-color: #4a5a66;
+            }
+            QPushButton:pressed {
+                background-color: #2a3a46;
+            }
+        """)
 
         def on_convert_focused():
             # Try focused widget first
@@ -653,6 +743,13 @@ class MainWindow(QWidget):
         self.conv_rgb01.editingFinished.connect(on_convert_from_rgb01)
 
         main_layout.addLayout(conv_layout)
+
+        # small gap before the status bar (about half a line height now)
+        try:
+            spacing = max(6, self.fontMetrics().lineSpacing() // 2)
+        except Exception:
+            spacing = 7
+        main_layout.addSpacing(spacing)
 
         # status bar
         self.status = QStatusBar()
@@ -700,8 +797,18 @@ class MainWindow(QWidget):
                 a = cfg.get('ui', 'color_a', fallback=None)
                 b = cfg.get('ui', 'color_b', fallback=None)
                 ch = cfg.get('ui', 'converter_hex', fallback=None)
-                if model and model in [self.model_combo.itemText(i) for i in range(self.model_combo.count())]:
-                    self.model_combo.setCurrentText(model)
+                # model in config may be either a friendly label or an internal key
+                available_labels = [self.model_combo.itemText(i) for i in range(self.model_combo.count())]
+                if model:
+                    # If model matches an internal key, map it to the friendly label
+                    if model.lower() in self.model_label_to_key.values():
+                        # find the label for this key
+                        for lab, key in self.model_label_to_key.items():
+                            if key == model.lower():
+                                self.model_combo.setCurrentText(lab)
+                                break
+                    elif model in available_labels:
+                        self.model_combo.setCurrentText(model)
                 if fmt and fmt in [self.format_combo.itemText(i) for i in range(self.format_combo.count())]:
                     self.format_combo.setCurrentText(fmt)
                 if a:
@@ -712,12 +819,14 @@ class MainWindow(QWidget):
                 if ch:
                     try:
                         self._conv_updating = True
-                        hx = parse_hex_string(ch)
-                        # Put the persisted hex into the Hex box and convert
-                        self.conv_hex.setPlainText(hx)
-                        r01 = hex_to_rgb01(hx)
-                        self.conv_rgb01.setPlainText(format_rgb01_from_tuple(r01))
-                        self.conv_rgb256.setPlainText(format_rgb256_from_tuple(tuple(int(round(x*255)) for x in r01)))
+                        # Decode escaped newlines stored in the INI and restore the Hex box
+                        decoded = ch.replace('\\n', '\n')
+                        self.conv_hex.setPlainText(decoded)
+                        # Trigger the usual conversion handler for the Hex box
+                        try:
+                            self.conv_hex.editingFinished.emit()
+                        except Exception:
+                            pass
                     except Exception:
                         pass
                     finally:
@@ -730,12 +839,14 @@ class MainWindow(QWidget):
         """Save current settings to ColorGradient.ini"""
         cfg = configparser.ConfigParser()
         cfg['ui'] = {
-            'model': self.model_combo.currentText(),
+            # Persist the internal key for the model (but keep friendly label in the UI)
+            'model': self.model_label_to_key.get(self.model_combo.currentText(), self.model_combo.currentText()),
             'format': self.format_combo.currentText(),
             'color_a': self.tile_a.hex,
             'color_b': self.tile_b.hex,
-            # Persist the first line of the Hex converter box for backward compatibility
-            'converter_hex': (self.conv_hex.toPlainText().splitlines()[0].strip() if self.conv_hex.toPlainText().splitlines() else '') ,
+            # Persist the full contents of the Hex converter box (multi-line)
+            # Encode newlines as '\\n' so configparser writes a single-line value reliably
+            'converter_hex': self.conv_hex.toPlainText().replace('\n', '\\n'),
         }
         with open(self.config_path, 'w', encoding='utf-8') as f:
             cfg.write(f)
@@ -783,7 +894,9 @@ class MainWindow(QWidget):
     def on_color_changed(self):
         a = self.tile_a.hex
         b = self.tile_b.hex
-        model = self.model_combo.currentText()
+        # Map the friendly label to the internal key used by interpolate()
+        sel = self.model_combo.currentText()
+        model = self.model_label_to_key.get(sel, sel).lower()
         steps = 7  # tile A + 5 mid + tile B
         try:
             colors = interpolate(a, b, steps, model)
@@ -835,6 +948,30 @@ if __name__ == '__main__':
     app.setStyleSheet("""
         QWidget { background: #28333b; color: #fff; font-family: "Segoe UI", Roboto, Arial; }
         QLabel { color: #eaeff2; font-size: 14px; }
+        /* Scrollbar styling to match controls */
+        QScrollBar:vertical {
+            background: #2b3a42;
+            width: 12px;
+            margin: 0px 0px 0px 0px;
+        }
+        QScrollBar::handle:vertical {
+            background: #3a4a56;
+            min-height: 20px;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+        QScrollBar:horizontal {
+            background: #2b3a42;
+            height: 12px;
+            margin: 0px 0px 0px 0px;
+        }
+        QScrollBar::handle:horizontal {
+            background: #3a4a56;
+            min-width: 20px;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
     """)
     w = MainWindow()
     w.show()
