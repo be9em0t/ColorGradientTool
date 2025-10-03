@@ -7,6 +7,7 @@
 # Edit colors in-place
 # Add more/less swatches
 # Add midpoint color
+# load color swatches into the converter list
 
 import sys
 import math
@@ -23,6 +24,10 @@ from coloraide import Color
 import colorsys
 import configparser
 from pathlib import Path
+
+# UI spacing constants
+# Gap between color swatches (px). Change this value to adjust spacing.
+SWATCH_GAP = 9
 
 # Utility: proper sRGB <-> linear sRGB conversions (IEC 61966-2-1)
 def srgb_comp_to_linear(c):
@@ -379,11 +384,31 @@ class MainWindow(QWidget):
         self.tile_a = ColorTile(self.color_a)
         self.tile_b = ColorTile(self.color_b)
 
-        # five intermediate preview tiles
-        self.preview_tiles = [QLabel() for _ in range(5)]
-        for lbl in self.preview_tiles:
-            lbl.setFixedSize(140, 80)
+        # dynamic intermediate preview tiles (default to 5 between A and B => total 7)
+        self.min_tiles_between = 1  # at least one between? keep semantics: min total tiles = 3 => 1 between
+        self.max_tiles_between = 9  # max total tiles = 11 => 9 between
+        self.tiles_between = 5
+        self.preview_tiles = []
+        for _ in range(self.tiles_between):
+            lbl = QLabel()
+            lbl.setFixedHeight(80)
             lbl.setStyleSheet('background: #777; border: 1px solid #222;')
+            self.preview_tiles.append(lbl)
+
+        # Add/remove link-like labels (styled) centered between the Tile A and Tile B labels
+        self.add_link = QLabel('[+]')
+        self.add_link.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link.setCursor(Qt.PointingHandCursor)
+        self.add_link.setToolTip('Add a tile (max 11 total)')
+
+        self.sub_link = QLabel('[-]')
+        self.sub_link.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link.setCursor(Qt.PointingHandCursor)
+        self.sub_link.setToolTip('Remove a tile (min 3 total)')
+
+        self.middle_label = QLabel('[tile]')
+        self.middle_label.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.middle_label.setAlignment(Qt.AlignCenter)
 
         # Color model selector (friendly labels shown; use mapping to internal keys)
         self.model_combo = QComboBox()
@@ -472,11 +497,30 @@ class MainWindow(QWidget):
         top_grid.addWidget(label_b, 0, 2, alignment=Qt.AlignRight)
 
         tiles_layout = QHBoxLayout()
-        tiles_layout.setSpacing(18)
-        tiles_layout.addWidget(self.tile_a)
+        tiles_layout.setSpacing(SWATCH_GAP)
+        # We'll create a container layout that we can rebuild when the number of tiles changes
+        self.tiles_container = QHBoxLayout()
+        self.tiles_container.setSpacing(SWATCH_GAP)
+        # initial population
+        self.tiles_container.addWidget(self.tile_a)
         for t in self.preview_tiles:
-            tiles_layout.addWidget(t)
-        tiles_layout.addWidget(self.tile_b)
+            self.tiles_container.addWidget(t)
+        self.tiles_container.addWidget(self.tile_b)
+
+        # Insert add/remove links centered on the label row: create a small widget layout for them
+        links_widget = QWidget()
+        links_layout = QHBoxLayout()
+        links_layout.setContentsMargins(0, 0, 0, 0)
+        links_layout.setSpacing(8)
+        links_layout.addWidget(self.sub_link)
+        links_layout.addWidget(self.middle_label)
+        links_layout.addWidget(self.add_link)
+        links_widget.setLayout(links_layout)
+
+        # Put tiles in the main tiles_layout. Place the add/remove links on the label row
+        tiles_layout.addLayout(self.tiles_container)
+        # Add the links widget to the label row (row 0, column 1) so it appears centered between the labels
+        top_grid.addWidget(links_widget, 0, 1, alignment=Qt.AlignCenter)
 
         top_grid.addLayout(tiles_layout, 1, 0, 1, 3)
 
@@ -767,6 +811,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # signals
         self.tile_a.clicked.connect(self.open_color_a_dialog)
         self.tile_b.clicked.connect(self.open_color_b_dialog)
+        # link clicks
+        try:
+            self.add_link.mousePressEvent = lambda e: self.add_tile()
+            self.sub_link.mousePressEvent = lambda e: self.remove_tile()
+        except Exception:
+            pass
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
         self.copy_button.clicked.connect(self.copy_colors_to_clipboard)
 
@@ -897,7 +947,8 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Map the friendly label to the internal key used by interpolate()
         sel = self.model_combo.currentText()
         model = self.model_label_to_key.get(sel, sel).lower()
-        steps = 7  # tile A + 5 mid + tile B
+        # total steps is tile A + tiles_between + tile B
+        steps = 2 + len(self.preview_tiles)
         try:
             colors = interpolate(a, b, steps, model)
         except Exception as ex:
@@ -907,7 +958,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Store colors for copying
         self.current_colors = colors
 
-        # update preview tiles (middle 5)
+        # update preview tiles (dynamic)
         for i, lbl in enumerate(self.preview_tiles):
             lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222;')
 
@@ -919,6 +970,56 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         smooth = interpolate(colors[0], colors[-1], 512, model)
         self.gradient_preview.set_colors(smooth)
         self.status.showMessage(f"Mode: {model} — Preview updated.")
+
+    # --- dynamic tile management ---
+    def rebuild_tiles(self):
+        """Rebuild the tiles_container layout according to current preview_tiles list."""
+        # Remove all items from tiles_container
+        while self.tiles_container.count():
+            item = self.tiles_container.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                # avoid deleting tile_a/tile_b widgets; just hide others
+                if w not in (self.tile_a, self.tile_b):
+                    w.setParent(None)
+                else:
+                    # keep existing edge tiles
+                    pass
+        # Re-add in order
+        self.tiles_container.addWidget(self.tile_a)
+        for lbl in self.preview_tiles:
+            # ensure label has the right fixed size
+            lbl.setFixedHeight(80)
+            # compute a width that will allow them to scale when window resizes by using expanding policy
+            lbl.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            self.tiles_container.addWidget(lbl)
+        self.tiles_container.addWidget(self.tile_b)
+        # Trigger layout update
+        self.updateGeometry()
+        self.on_color_changed()
+
+    def add_tile(self):
+        """Add an intermediate tile if under the maximum."""
+        if len(self.preview_tiles) >= self.max_tiles_between:
+            self.status.showMessage('Already at maximum of 11 tiles.')
+            return
+        lbl = QLabel()
+        lbl.setFixedHeight(80)
+        lbl.setStyleSheet('background: #777; border: 1px solid #222;')
+        self.preview_tiles.append(lbl)
+        self.rebuild_tiles()
+
+    def remove_tile(self):
+        """Remove an intermediate tile if above the minimum."""
+        if len(self.preview_tiles) <= self.min_tiles_between:
+            self.status.showMessage('Already at minimum of 3 tiles.')
+            return
+        lbl = self.preview_tiles.pop()
+        try:
+            lbl.setParent(None)
+        except Exception:
+            pass
+        self.rebuild_tiles()
 
 
 if __name__ == '__main__':
