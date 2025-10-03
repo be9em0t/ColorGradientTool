@@ -1,0 +1,30 @@
+# Local environment variables
+.env
+.DS_Store
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+env/
+.env
+venv/
+.venv/
+
+*.json
+.pytest_cache/
+images_temp/**
+backup/**
+*.zip
+SaveOutput/**
+
+# Keep .github and .clinerules tracked
+!.github/
+!.github/**
+!.clinerules/
+!.clinerules/**
+!.continue/
+!.continue/**
+!.vscode/
+!.vscode/**
