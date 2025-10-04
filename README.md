@@ -1,3 +1,5 @@
+![Screenshot](images/Screenshot.png)
+
 ## Description: 
 
 A Color Gradient Tool that allows generating gradients 
