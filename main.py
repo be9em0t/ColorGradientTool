@@ -125,6 +125,9 @@ GRADIENT_PREVIEW_HEIGHT = 80    # Height of gradient preview bar
 MINIMUM_WINDOW_WIDTH = 600      # Minimum window width in pixels
 MINIMUM_WINDOW_HEIGHT = 560     # Minimum window height in pixels
 
+# UI color constants
+LINK_COLOR = '#4CA7F8' #'#4588C4'          # Color for clickable link-style labels and highlights
+
 
 class GradientPreview(QLabel):
     def __init__(self, parent=None, border_radius=4):
@@ -261,8 +264,8 @@ class MultilineEdit(QTextEdit):
         if is_source:
             # Source highlighting with blue border
             source_style = base_style.replace(
-                'border-radius: 4px;',
-                'border: 2px solid #4588C4;\n                border-radius: 4px;'
+                'border-radius: 5px;',
+                f'border: 2px solid {LINK_COLOR};\n                border-radius: 5px;'
             )
             self.setStyleSheet(source_style)
         else:
@@ -394,39 +397,39 @@ class MainWindow(QWidget):
         # Add/remove link-like labels (styled) centered between the Tile A and Tile B labels
         # 2-color mode controls
         self.add_link = QLabel('[+]')
-        self.add_link.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.add_link.setCursor(Qt.PointingHandCursor)
         self.add_link.setToolTip('Add a tile (max 11 total)')
 
         self.sub_link = QLabel('[-]')
-        self.sub_link.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.sub_link.setCursor(Qt.PointingHandCursor)
         self.sub_link.setToolTip('Remove a tile (min 3 total)')
 
         # 3-color mode controls (left side - AC gradient)
         self.add_link_left = QLabel('[+]')
-        self.add_link_left.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link_left.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.add_link_left.setCursor(Qt.PointingHandCursor)
         self.add_link_left.setToolTip('Add a tile to left gradient (A-C)')
 
         self.sub_link_left = QLabel('[-]')
-        self.sub_link_left.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link_left.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.sub_link_left.setCursor(Qt.PointingHandCursor)
         self.sub_link_left.setToolTip('Remove a tile from left gradient (A-C)')
 
         # 3-color mode controls (right side - CB gradient)
         self.add_link_right = QLabel('[+]')
-        self.add_link_right.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link_right.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.add_link_right.setCursor(Qt.PointingHandCursor)
         self.add_link_right.setToolTip('Add a tile to right gradient (C-B)')
 
         self.sub_link_right = QLabel('[-]')
-        self.sub_link_right.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link_right.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.sub_link_right.setCursor(Qt.PointingHandCursor)
         self.sub_link_right.setToolTip('Remove a tile from right gradient (C-B)')
 
-        self.middle_label = QLabel('[tile]')
-        self.middle_label.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.middle_label = QLabel('[enable 3-tile]')
+        self.middle_label.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.middle_label.setAlignment(Qt.AlignCenter)
         self.middle_label.setCursor(Qt.PointingHandCursor)
         self.middle_label.setToolTip('Click to enable/disable 3-color mode')
@@ -541,7 +544,7 @@ class MainWindow(QWidget):
         label_space.setStyleSheet('color: #eaeff2;')
         # Help icon next to Color space (use simple text '[?]' for cross-platform reliability)
         help_icon = QLabel('[?]')
-        help_icon.setStyleSheet('color: #4588C4; font-size: 13px; padding-left: 6px;')
+        help_icon.setStyleSheet(f'color: {LINK_COLOR}; font-size: 13px; padding-left: 6px;')
         help_icon.setToolTip(
             """
 <b>Color space descriptions</b><br><br>
@@ -1079,7 +1082,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.links_layout.addWidget(self.add_link_right)
         else:
             # 2-color mode: [-] [tile] [+]
-            self.middle_label.setText('[tile]')
+            self.middle_label.setText('[enable 3-tile]')
             self.middle_label.setToolTip('Click to enable 3-color mode')
             
             self.links_layout.addWidget(self.sub_link)
