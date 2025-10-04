@@ -22,7 +22,6 @@
 # It's better to be minimal and add code later, when it becomes explicitly necessary, 
 # than to stuff boilerplate code for edge cases that cause hard to track errors.
 
-
 import sys
 import math
 from PySide6.QtWidgets import (
@@ -42,13 +41,25 @@ from color import (
 from settings import Settings
 
 # UI spacing constants moved to INI settings
+# Tile count boundaries (hardcoded for UI stability)
+MIN_TILES_BETWEEN = 1  # Minimum intermediate tiles for all gradients
+MAX_TILES_AB = 9      # Maximum intermediate tiles for AB gradient (total 11: A + 9 + B)
+MAX_TILES_AC = 5      # Maximum intermediate tiles for AC gradient
+MAX_TILES_CB = 5      # Maximum intermediate tiles for CB gradient (total max 13: A + 5 + C + 5 + B)
+
+# UI sizing constants (hardcoded for consistent layout)
+DEFAULT_TILE_HEIGHT = 80        # Default tile height in pixels
+MINIMUM_TILE_WIDTH = 20  # Absolute minimum for extreme cases (usability vs predictability tradeoff)
+GRADIENT_PREVIEW_HEIGHT = 80    # Height of gradient preview bar
+MINIMUM_WINDOW_WIDTH = 600      # Minimum window width in pixels
+MINIMUM_WINDOW_HEIGHT = 560     # Minimum window height in pixels
 
 
 class GradientPreview(QLabel):
     def __init__(self, parent=None, border_radius=4):
         super().__init__(parent)
-        # Match the height of the color swatches (80 px)
-        self.setFixedHeight(80)
+        # Match the height of the color swatches
+        self.setFixedHeight(GRADIENT_PREVIEW_HEIGHT)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._colors = ['#ff0000', '#0000ff']
         self.border_radius = border_radius
@@ -190,37 +201,60 @@ class MainWindow(QWidget):
         except Exception:
             pass
         
-        self.setMinimumSize(980, 560)
+        self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
 
         # Initialize settings
         config_path = Path(__file__).parent / 'ColorGradient.ini'
         self.settings = Settings(config_path)
         self.settings.load()
 
-        # Default colors from settings
-        self.color_a = self.settings.color_a
-        self.color_b = self.settings.color_b
+        # 3-color mode state
+        self.three_mode = self.settings.three_mode
 
         title = QLabel("Color Gradient Tool")
         title.setStyleSheet("font-size: 28px; font-weight: 600; color: #ffffff;")
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
-        # Tiles row - master tiles with border
-        self.tile_a = ColorTile(self.color_a, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
-        self.tile_b = ColorTile(self.color_b, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
+        # Tiles row - master tiles with border (use settings colors directly)
+        self.tile_a = ColorTile(self.settings.color_a, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
+        self.tile_b = ColorTile(self.settings.color_b, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
+        self.tile_c = ColorTile(self.settings.color_c, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
 
-        # dynamic intermediate preview tiles - use INI value ab_count
-        self.min_tiles_between = 1  # at least one between? keep semantics: min total tiles = 3 => 1 between
-        self.max_tiles_between = 9  # max total tiles = 11 => 9 between
-        self.preview_tiles = []
+        # dynamic intermediate preview tiles - use global constants
+        self.min_tiles_between = MIN_TILES_BETWEEN
+        self.max_tiles_ab = MAX_TILES_AB
+        self.max_tiles_ac = MAX_TILES_AC  
+        self.max_tiles_cb = MAX_TILES_CB
+        
+        # 2-color mode: AB gradient tiles
+        self.preview_tiles_ab = []
         for _ in range(self.settings.ab_count):
             lbl = QLabel()
-            lbl.setFixedSize(80, 80)  # Initial size, will be updated by update_tile_sizes()
+            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)  # Initial size, will be updated by update_tile_sizes()
             lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
             lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            self.preview_tiles.append(lbl)
+            self.preview_tiles_ab.append(lbl)
+        
+        # 3-color mode: AC gradient tiles (left side)
+        self.preview_tiles_ac = []
+        for _ in range(self.settings.ac_count):
+            lbl = QLabel()
+            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
+            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.preview_tiles_ac.append(lbl)
+        
+        # 3-color mode: CB gradient tiles (right side)
+        self.preview_tiles_cb = []
+        for _ in range(self.settings.cb_count):
+            lbl = QLabel()
+            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
+            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self.preview_tiles_cb.append(lbl)
 
         # Add/remove link-like labels (styled) centered between the Tile A and Tile B labels
+        # 2-color mode controls
         self.add_link = QLabel('[+]')
         self.add_link.setStyleSheet('color: #4588C4; font-size: 14px;')
         self.add_link.setCursor(Qt.PointingHandCursor)
@@ -231,9 +265,33 @@ class MainWindow(QWidget):
         self.sub_link.setCursor(Qt.PointingHandCursor)
         self.sub_link.setToolTip('Remove a tile (min 3 total)')
 
+        # 3-color mode controls (left side - AC gradient)
+        self.add_link_left = QLabel('[+]')
+        self.add_link_left.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link_left.setCursor(Qt.PointingHandCursor)
+        self.add_link_left.setToolTip('Add a tile to left gradient (A-C)')
+
+        self.sub_link_left = QLabel('[-]')
+        self.sub_link_left.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link_left.setCursor(Qt.PointingHandCursor)
+        self.sub_link_left.setToolTip('Remove a tile from left gradient (A-C)')
+
+        # 3-color mode controls (right side - CB gradient)
+        self.add_link_right = QLabel('[+]')
+        self.add_link_right.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.add_link_right.setCursor(Qt.PointingHandCursor)
+        self.add_link_right.setToolTip('Add a tile to right gradient (C-B)')
+
+        self.sub_link_right = QLabel('[-]')
+        self.sub_link_right.setStyleSheet('color: #4588C4; font-size: 14px;')
+        self.sub_link_right.setCursor(Qt.PointingHandCursor)
+        self.sub_link_right.setToolTip('Remove a tile from right gradient (C-B)')
+
         self.middle_label = QLabel('[tile]')
         self.middle_label.setStyleSheet('color: #4588C4; font-size: 14px;')
         self.middle_label.setAlignment(Qt.AlignCenter)
+        self.middle_label.setCursor(Qt.PointingHandCursor)
+        self.middle_label.setToolTip('Click to enable/disable 3-color mode')
 
         # Color model selector (friendly labels shown; use mapping to internal keys)
         self.model_combo = QComboBox()
@@ -320,26 +378,20 @@ class MainWindow(QWidget):
         # We'll create a container layout that we can rebuild when the number of tiles changes
         self.tiles_container = QHBoxLayout()
         self.tiles_container.setSpacing(self.settings.swatch_gap)
-        # initial population
-        self.tiles_container.addWidget(self.tile_a)
-        for t in self.preview_tiles:
-            self.tiles_container.addWidget(t)
-        self.tiles_container.addWidget(self.tile_b)
+        # initial population will be done by rebuild_tiles() in initialization
 
         # Insert add/remove links centered on the label row: create a small widget layout for them
-        links_widget = QWidget()
-        links_layout = QHBoxLayout()
-        links_layout.setContentsMargins(0, 0, 0, 0)
-        links_layout.setSpacing(8)
-        links_layout.addWidget(self.sub_link)
-        links_layout.addWidget(self.middle_label)
-        links_layout.addWidget(self.add_link)
-        links_widget.setLayout(links_layout)
+        self.links_widget = QWidget()
+        self.links_layout = QHBoxLayout()
+        self.links_layout.setContentsMargins(0, 0, 0, 0)
+        self.links_layout.setSpacing(8)
+        # Initial population will be done by update_mode_ui()
+        self.links_widget.setLayout(self.links_layout)
 
         # Put tiles in the main tiles_layout. Place the add/remove links on the label row
         tiles_layout.addLayout(self.tiles_container)
         # Add the links widget to the label row (row 0, column 1) so it appears centered between the labels
-        top_grid.addWidget(links_widget, 0, 1, alignment=Qt.AlignCenter)
+        top_grid.addWidget(self.links_widget, 0, 1, alignment=Qt.AlignCenter)
 
         top_grid.addLayout(tiles_layout, 1, 0, 1, 3)
 
@@ -600,10 +652,21 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # signals
         self.tile_a.clicked.connect(self.open_color_a_dialog)
         self.tile_b.clicked.connect(self.open_color_b_dialog)
+        self.tile_c.clicked.connect(self.open_color_c_dialog)
         # link clicks
         try:
-            self.add_link.mousePressEvent = lambda e: self.add_tile()
-            self.sub_link.mousePressEvent = lambda e: self.remove_tile()
+            # 2-color mode controls
+            self.add_link.mousePressEvent = lambda e: self.add_tile_ab()
+            self.sub_link.mousePressEvent = lambda e: self.remove_tile_ab()
+            
+            # 3-color mode controls
+            self.add_link_left.mousePressEvent = lambda e: self.add_tile_ac()
+            self.sub_link_left.mousePressEvent = lambda e: self.remove_tile_ac()
+            self.add_link_right.mousePressEvent = lambda e: self.add_tile_cb()
+            self.sub_link_right.mousePressEvent = lambda e: self.remove_tile_cb()
+            
+            # Mode toggle
+            self.middle_label.mousePressEvent = lambda e: self.toggle_three_mode()
         except Exception:
             pass
         self.model_combo.currentTextChanged.connect(self.on_model_changed)
@@ -613,30 +676,43 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Store current gradient colors for copying
         self.current_colors = []
 
-        # initial render
-        self.update_tile_sizes()
-        self.on_color_changed()
+        # initial render - set up UI for current mode
+        self.update_mode_ui()
+        self.rebuild_tiles()
 
     def update_tile_sizes(self):
         """Calculate and update tile widths to maintain uniform appearance"""
         # Get current window width (use minimum width if not yet shown)
         available_width = max(self.width(), self.minimumWidth()) - 40  # account for margins
         
-        # Calculate total tiles and gaps
-        total_tiles = 2 + len(self.preview_tiles)  # A + preview_tiles + B
+        if self.three_mode:
+            # Calculate total tiles and gaps for 3-color mode: A + AC + C + CB + B
+            total_tiles = 3 + len(self.preview_tiles_ac) + len(self.preview_tiles_cb)
+        else:
+            # Calculate total tiles and gaps for 2-color mode: A + AB + B
+            total_tiles = 2 + len(self.preview_tiles_ab)
+        
         total_gaps = (total_tiles - 1) * self.settings.swatch_gap
         
-        # Calculate tile width
-        tile_width = max(80, (available_width - total_gaps) // total_tiles)  # minimum 80px width
-        tile_height = 80
+        # Simple tile width calculation: available space divided equally between all tiles
+        calculated_width = (available_width - total_gaps) // total_tiles if total_tiles > 0 else MINIMUM_TILE_WIDTH
+        tile_width = max(MINIMUM_TILE_WIDTH, calculated_width)
+        tile_height = DEFAULT_TILE_HEIGHT
         
         # Update master tiles
         self.tile_a.set_size(tile_width, tile_height)
         self.tile_b.set_size(tile_width, tile_height)
+        self.tile_c.set_size(tile_width, tile_height)
         
-        # Update preview tiles (they are QLabels, need different approach)
-        for lbl in self.preview_tiles:
-            lbl.setFixedSize(tile_width, tile_height)
+        # Update preview tiles based on mode
+        if self.three_mode:
+            for lbl in self.preview_tiles_ac:
+                lbl.setFixedSize(tile_width, tile_height)
+            for lbl in self.preview_tiles_cb:
+                lbl.setFixedSize(tile_width, tile_height)
+        else:
+            for lbl in self.preview_tiles_ab:
+                lbl.setFixedSize(tile_width, tile_height)
 
     def resizeEvent(self, event):
         """Update tile sizes when window is resized"""
@@ -649,8 +725,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.settings.format = self.format_combo.currentText()
         self.settings.color_a = self.tile_a.hex
         self.settings.color_b = self.tile_b.hex
+        self.settings.color_c = self.tile_c.hex
         self.settings.converter_hex = self.conv_hex.toPlainText()
-        self.settings.ab_count = len(self.preview_tiles)
+        self.settings.three_mode = self.three_mode
+        self.settings.ab_count = len(self.preview_tiles_ab)
+        self.settings.ac_count = len(self.preview_tiles_ac)
+        self.settings.cb_count = len(self.preview_tiles_cb)
         
         try:
             self.settings.save()
@@ -661,25 +741,43 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
     def open_color_a_dialog(self):
         col = QColorDialog.getColor(QColor(self.tile_a.hex), self, "Choose Tile A")
         if col.isValid():
+            old_color = self.tile_a.hex
             self.tile_a.set_color(col.name())
             # Update settings and save immediately
             self.settings.color_a = self.tile_a.hex
             try:
                 self.settings.save()
+                self.status.showMessage(f"Color A updated: {old_color} → {self.tile_a.hex} (saved to INI)")
             except Exception:
-                pass
+                self.status.showMessage(f"Color A updated: {old_color} → {self.tile_a.hex} (save failed)")
             self.on_color_changed()
 
     def open_color_b_dialog(self):
         col = QColorDialog.getColor(QColor(self.tile_b.hex), self, "Choose Tile B")
         if col.isValid():
+            old_color = self.tile_b.hex
             self.tile_b.set_color(col.name())
             # Update settings and save immediately
             self.settings.color_b = self.tile_b.hex
             try:
                 self.settings.save()
+                self.status.showMessage(f"Color B updated: {old_color} → {self.tile_b.hex} (saved to INI)")
             except Exception:
-                pass
+                self.status.showMessage(f"Color B updated: {old_color} → {self.tile_b.hex} (save failed)")
+            self.on_color_changed()
+
+    def open_color_c_dialog(self):
+        col = QColorDialog.getColor(QColor(self.tile_c.hex), self, "Choose Tile C")
+        if col.isValid():
+            old_color = self.tile_c.hex
+            self.tile_c.set_color(col.name())
+            # Update settings and save immediately
+            self.settings.color_c = self.tile_c.hex
+            try:
+                self.settings.save()
+                self.status.showMessage(f"Color C updated: {old_color} → {self.tile_c.hex} (saved to INI)")
+            except Exception:
+                self.status.showMessage(f"Color C updated: {old_color} → {self.tile_c.hex} (save failed)")
             self.on_color_changed()
 
     def on_model_changed(self, model=None):
@@ -703,6 +801,64 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         except Exception:
             pass
 
+    def toggle_three_mode(self):
+        """Toggle between 2-color and 3-color mode"""
+        self.three_mode = not self.three_mode
+        self.settings.three_mode = self.three_mode
+        
+        # Debug: Verify colors are preserved in settings
+        current_a = self.settings.color_a
+        current_b = self.settings.color_b
+        current_c = self.settings.color_c
+        
+        # Update UI to reflect mode change
+        self.update_mode_ui()
+        
+        # Save settings immediately
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        
+        # Rebuild tiles and update gradients
+        self.rebuild_tiles()
+        
+        # Status message with color verification
+        mode_text = '3-color' if self.three_mode else '2-color'
+        self.status.showMessage(f"Switched to {mode_text} mode. Colors: A={current_a}, B={current_b}, C={current_c}")
+
+    def update_mode_ui(self):
+        """Update UI elements to reflect current mode"""
+        # Ensure tile colors are synced with settings
+        self.tile_a.set_color(self.settings.color_a)
+        self.tile_b.set_color(self.settings.color_b)
+        self.tile_c.set_color(self.settings.color_c)
+        
+        # Clear existing links layout
+        while self.links_layout.count():
+            item = self.links_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+        
+        if self.three_mode:
+            # 3-color mode: [-][+] [Tile C] [-][+]
+            self.middle_label.setText('[Tile C]')
+            self.middle_label.setToolTip('Click to disable 3-color mode')
+            
+            self.links_layout.addWidget(self.sub_link_left)
+            self.links_layout.addWidget(self.add_link_left)
+            self.links_layout.addWidget(self.middle_label)
+            self.links_layout.addWidget(self.sub_link_right)
+            self.links_layout.addWidget(self.add_link_right)
+        else:
+            # 2-color mode: [-] [tile] [+]
+            self.middle_label.setText('[tile]')
+            self.middle_label.setToolTip('Click to enable 3-color mode')
+            
+            self.links_layout.addWidget(self.sub_link)
+            self.links_layout.addWidget(self.middle_label)
+            self.links_layout.addWidget(self.add_link)
+
     def copy_colors_to_clipboard(self):
         """Copy the current gradient colors to clipboard in the selected format"""
         if not self.current_colors:
@@ -725,90 +881,253 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
     def on_color_changed(self):
         a = self.tile_a.hex
         b = self.tile_b.hex
+        c = self.tile_c.hex
         # Map the friendly label to the internal key used by interpolate()
         sel = self.model_combo.currentText()
         model = self.settings.get_model_key(sel).lower()
-        # total steps is tile A + ab_count + tile B
-        steps = 2 + len(self.preview_tiles)
-        try:
-            colors = interpolate(a, b, steps, model)
-        except Exception as ex:
-            self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
-            colors = interpolate(a, b, steps, 'srgb')
+        
+        if self.three_mode:
+            # 3-color mode: create AC and CB gradients using exact INI counts
+            ac_steps = 2 + self.settings.ac_count  # A + AC preview tiles + C
+            cb_steps = 2 + self.settings.cb_count  # C + CB preview tiles + B
+            
+            try:
+                ac_colors = interpolate(a, c, ac_steps, model)
+                cb_colors = interpolate(c, b, cb_steps, model)
+            except Exception as ex:
+                self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
+                ac_colors = interpolate(a, c, ac_steps, 'srgb')
+                cb_colors = interpolate(c, b, cb_steps, 'srgb')
+            
+            # Update only visible AC preview tiles
+            for i, lbl in enumerate(self.preview_tiles_ac):
+                if i < len(ac_colors) - 2:  # Exclude A and C
+                    lbl.setStyleSheet(f'background: {ac_colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            
+            # Update only visible CB preview tiles
+            for i, lbl in enumerate(self.preview_tiles_cb):
+                if i < len(cb_colors) - 2:  # Exclude C and B
+                    lbl.setStyleSheet(f'background: {cb_colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            
+            # Combine all colors for copying (AC without last + CB)
+            all_colors = ac_colors[:-1] + cb_colors  # Remove duplicate C from AC
+            self.current_colors = all_colors
+            
+            # Update master tiles with exact colors from gradients
+            self.tile_a.set_color(ac_colors[0])
+            self.tile_c.set_color(ac_colors[-1])  # Should equal cb_colors[0]
+            self.tile_b.set_color(cb_colors[-1])
+            
+            # Smooth gradient for preview (A to C to B)
+            smooth_ac = interpolate(a, c, 256, model)
+            smooth_cb = interpolate(c, b, 256, model)
+            smooth = smooth_ac[:-1] + smooth_cb  # Remove duplicate C
+            
+        else:
+            # 2-color mode: create AB gradient using exact INI count
+            steps = 2 + self.settings.ab_count
+            try:
+                colors = interpolate(a, b, steps, model)
+            except Exception as ex:
+                self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
+                colors = interpolate(a, b, steps, 'srgb')
 
-        # Store colors for copying
-        self.current_colors = colors
+            # Store colors for copying
+            self.current_colors = colors
 
-        # update preview tiles (dynamic)
-        for i, lbl in enumerate(self.preview_tiles):
-            lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+            # Update only visible AB preview tiles
+            for i, lbl in enumerate(self.preview_tiles_ab):
+                if i < len(colors) - 2:  # Exclude A and B
+                    lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
 
-        # update tile A and B (in case fitted to gamut changed them)
-        self.tile_a.set_color(colors[0])
-        self.tile_b.set_color(colors[-1])
+            # Update master tiles with exact colors from gradient
+            self.tile_a.set_color(colors[0])
+            self.tile_b.set_color(colors[-1])
 
-        # smooth gradient (many steps)
-        smooth = interpolate(colors[0], colors[-1], 512, model)
+            # Smooth gradient for preview
+            smooth = interpolate(colors[0], colors[-1], 512, model)
+        
         self.gradient_preview.set_colors(smooth)
-        self.status.showMessage(f"Mode: {model} — Preview updated.")
+        mode_text = "3-color" if self.three_mode else "2-color"
+        self.status.showMessage(f"Mode: {model} ({mode_text}) — Preview updated.")
 
     # --- dynamic tile management ---
     def rebuild_tiles(self):
-        """Rebuild the tiles_container layout according to current preview_tiles list."""
+        """Rebuild the tiles_container layout according to current mode and preview tiles."""
         # Remove all items from tiles_container
         while self.tiles_container.count():
             item = self.tiles_container.takeAt(0)
             w = item.widget()
             if w is not None:
-                # avoid deleting tile_a/tile_b widgets; just hide others
-                if w not in (self.tile_a, self.tile_b):
+                # avoid deleting tile_a/tile_b/tile_c widgets; just hide others
+                if w not in (self.tile_a, self.tile_b, self.tile_c):
                     w.setParent(None)
                 else:
-                    # keep existing edge tiles
+                    # keep existing master tiles but hide them for now
                     pass
-        # Re-add in order
-        self.tiles_container.addWidget(self.tile_a)
-        for lbl in self.preview_tiles:
-            # Preview tiles use fixed size policy for uniform appearance
-            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            self.tiles_container.addWidget(lbl)
-        self.tiles_container.addWidget(self.tile_b)
+        
+        if self.three_mode:
+            # 3-color mode: Show A, C, B and AC/CB gradients; hide AB gradients
+            self.tile_a.show()
+            self.tile_b.show()
+            self.tile_c.show()
+            
+            # Hide AB gradient tiles
+            for lbl in self.preview_tiles_ab:
+                lbl.hide()
+            
+            # Show and add AC gradient tiles
+            for lbl in self.preview_tiles_ac:
+                lbl.show()
+                lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            
+            # Show and add CB gradient tiles
+            for lbl in self.preview_tiles_cb:
+                lbl.show()
+                lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            
+            # Layout: A + AC tiles + C + CB tiles + B
+            self.tiles_container.addWidget(self.tile_a)
+            for lbl in self.preview_tiles_ac:
+                self.tiles_container.addWidget(lbl)
+            self.tiles_container.addWidget(self.tile_c)
+            for lbl in self.preview_tiles_cb:
+                self.tiles_container.addWidget(lbl)
+            self.tiles_container.addWidget(self.tile_b)
+            
+        else:
+            # 2-color mode: Show A, B and AB gradients; hide C and AC/CB gradients
+            self.tile_a.show()
+            self.tile_b.show()
+            self.tile_c.hide()
+            
+            # Hide AC and CB gradient tiles
+            for lbl in self.preview_tiles_ac:
+                lbl.hide()
+            for lbl in self.preview_tiles_cb:
+                lbl.hide()
+            
+            # Show AB gradient tiles
+            for lbl in self.preview_tiles_ab:
+                lbl.show()
+                lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            
+            # Layout: A + AB tiles + B
+            self.tiles_container.addWidget(self.tile_a)
+            for lbl in self.preview_tiles_ab:
+                self.tiles_container.addWidget(lbl)
+            self.tiles_container.addWidget(self.tile_b)
+        
         # Update tile sizes and spacing
         self.update_tile_sizes()
         # Trigger layout update
         self.updateGeometry()
         self.on_color_changed()
 
-    def add_tile(self):
-        """Add an intermediate tile if under the maximum."""
-        if len(self.preview_tiles) >= self.max_tiles_between:
-            self.status.showMessage('Already at maximum of 11 tiles.')
+    # 2-color mode tile management
+    def add_tile_ab(self):
+        """Add an intermediate tile to AB gradient if under the maximum."""
+        if len(self.preview_tiles_ab) >= self.max_tiles_ab:
+            self.status.showMessage(f'Already at maximum of {2 + self.max_tiles_ab} tiles.')
             return
         lbl = QLabel()
-        lbl.setFixedSize(80, 80)  # Initial size, will be updated by update_tile_sizes()
+        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)  # Initial size, will be updated by update_tile_sizes()
         lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
         lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        self.preview_tiles.append(lbl)
+        self.preview_tiles_ab.append(lbl)
         # Update settings and save immediately
-        self.settings.ab_count = len(self.preview_tiles)
+        self.settings.ab_count = len(self.preview_tiles_ab)
         try:
             self.settings.save()
         except Exception:
             pass
         self.rebuild_tiles()
 
-    def remove_tile(self):
-        """Remove an intermediate tile if above the minimum."""
-        if len(self.preview_tiles) <= self.min_tiles_between:
-            self.status.showMessage('Already at minimum of 3 tiles.')
+    def remove_tile_ab(self):
+        """Remove an intermediate tile from AB gradient if above the minimum."""
+        if len(self.preview_tiles_ab) <= self.min_tiles_between:
+            self.status.showMessage(f'Already at minimum of {2 + self.min_tiles_between} tiles.')
             return
-        lbl = self.preview_tiles.pop()
+        lbl = self.preview_tiles_ab.pop()
         try:
             lbl.setParent(None)
         except Exception:
             pass
         # Update settings and save immediately
-        self.settings.ab_count = len(self.preview_tiles)
+        self.settings.ab_count = len(self.preview_tiles_ab)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        self.rebuild_tiles()
+
+    # 3-color mode tile management
+    def add_tile_ac(self):
+        """Add an intermediate tile to AC gradient (left side)."""
+        if len(self.preview_tiles_ac) >= self.max_tiles_ac:
+            self.status.showMessage(f'Already at maximum of {self.max_tiles_ac} tiles for AC gradient.')
+            return
+        lbl = QLabel()
+        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
+        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.preview_tiles_ac.append(lbl)
+        # Update settings and save immediately
+        self.settings.ac_count = len(self.preview_tiles_ac)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        self.rebuild_tiles()
+
+    def remove_tile_ac(self):
+        """Remove an intermediate tile from AC gradient (left side)."""
+        if len(self.preview_tiles_ac) <= self.min_tiles_between:
+            self.status.showMessage(f'AC gradient already at minimum of {self.min_tiles_between} tiles.')
+            return
+        lbl = self.preview_tiles_ac.pop()
+        try:
+            lbl.setParent(None)
+        except Exception:
+            pass
+        # Update settings and save immediately
+        self.settings.ac_count = len(self.preview_tiles_ac)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        self.rebuild_tiles()
+
+    def add_tile_cb(self):
+        """Add an intermediate tile to CB gradient (right side)."""
+        if len(self.preview_tiles_cb) >= self.max_tiles_cb:
+            self.status.showMessage(f'Already at maximum of {self.max_tiles_cb} tiles for CB gradient.')
+            return
+        lbl = QLabel()
+        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
+        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        self.preview_tiles_cb.append(lbl)
+        # Update settings and save immediately
+        self.settings.cb_count = len(self.preview_tiles_cb)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        self.rebuild_tiles()
+
+    def remove_tile_cb(self):
+        """Remove an intermediate tile from CB gradient (right side)."""
+        if len(self.preview_tiles_cb) <= self.min_tiles_between:
+            self.status.showMessage(f'CB gradient already at minimum of {self.min_tiles_between} tiles.')
+            return
+        lbl = self.preview_tiles_cb.pop()
+        try:
+            lbl.setParent(None)
+        except Exception:
+            pass
+        # Update settings and save immediately
+        self.settings.cb_count = len(self.preview_tiles_cb)
         try:
             self.settings.save()
         except Exception:
