@@ -24,6 +24,7 @@
 
 import sys
 import math
+import os
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QColorDialog,
     QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit
@@ -39,6 +40,43 @@ from color import (
     format_rgb01_from_tuple, format_rgb256_from_tuple
 )
 from settings import Settings
+
+
+def get_config_path():
+    """
+    Get the appropriate configuration file path based on whether the app is packaged.
+    
+    For packaged macOS apps: ~/Library/Application Support/ColorGradientTool/ColorGradient.ini
+    For development: ./ColorGradient.ini (relative to script)
+    """
+    # Check if we're running as a PyInstaller bundle
+    if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
+        # We're in a PyInstaller bundle - use Application Support directory
+        if sys.platform == 'darwin':  # macOS
+            app_support = Path.home() / 'Library' / 'Application Support' / 'ColorGradientTool'
+            app_support.mkdir(parents=True, exist_ok=True)
+            config_path = app_support / 'ColorGradient.ini'
+            
+            # Copy default settings from bundle if user config doesn't exist
+            if not config_path.exists():
+                try:
+                    # Try to find the bundled ini file
+                    bundle_ini = Path(sys._MEIPASS) / 'ColorGradient.ini'
+                    if bundle_ini.exists():
+                        import shutil
+                        shutil.copy2(bundle_ini, config_path)
+                except Exception:
+                    pass  # If copying fails, Settings class will use defaults
+            
+            return config_path
+        else:
+            # For other platforms (Windows), use a similar approach
+            app_data = Path.home() / 'AppData' / 'Roaming' / 'ColorGradientTool'
+            app_data.mkdir(parents=True, exist_ok=True)
+            return app_data / 'ColorGradient.ini'
+    else:
+        # Development mode - use the original behavior
+        return Path(__file__).parent / 'ColorGradient.ini'
 
 # UI spacing constants moved to INI settings
 # Tile count boundaries (hardcoded for UI stability)
@@ -203,8 +241,8 @@ class MainWindow(QWidget):
         
         self.setMinimumSize(MINIMUM_WINDOW_WIDTH, MINIMUM_WINDOW_HEIGHT)
 
-        # Initialize settings
-        config_path = Path(__file__).parent / 'ColorGradient.ini'
+        # Initialize settings with proper path for packaged apps
+        config_path = get_config_path()
         self.settings = Settings(config_path)
         self.settings.load()
 
