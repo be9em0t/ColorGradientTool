@@ -264,3 +264,153 @@ class ColorParser:
             out_rgb256.append(format_rgb256_from_tuple(tuple(int(round(v*255)) for v in vals)))
             out_hex.append(rgb01_to_hex(vals))
         return out_hex, out_rgb256, out_rgb01
+
+
+# ========== INPUT ADAPTER FUNCTIONS ==========
+# These functions handle various popular color input formats with different delimiters and brackets
+
+class ColorInputAdapter:
+    """
+    Input adapter for handling various popular color formatting patterns.
+    Supports multiple delimiters and bracket formats without modifying existing parsing logic.
+    """
+    
+    @staticmethod
+    def parse_hex_input(input_text):
+        """
+        Parse hex color input with various delimiters.
+        Colors are delimited by: newline, comma+newline, semicolon+newline
+        Formats: #rrggbb or rrggbb
+        
+        Examples:
+        - "#288ceb\n#a778ae\n#e15e1e"
+        - "288ceb,\na778ae,\ne15e1e"
+        - "#288ceb;\n#a778ae;\n#e15e1e"
+        """
+        if not input_text or not input_text.strip():
+            return []
+        
+        # Split by color delimiters: newline, comma+newline, semicolon+newline
+        import re
+        # Split on: newline OR comma followed by newline OR semicolon followed by newline
+        colors = re.split(r'(?:,\s*\n|\;\s*\n|\n)', input_text.strip())
+        
+        # Clean and validate each color
+        cleaned_colors = []
+        for color in colors:
+            color = color.strip().rstrip(',;')  # Remove trailing delimiters
+            if color:  # Skip empty strings
+                try:
+                    # Use existing parse_hex_string function
+                    normalized_hex = parse_hex_string(color)
+                    cleaned_colors.append(normalized_hex)
+                except ValueError:
+                    continue  # Skip invalid hex colors
+        
+        return cleaned_colors
+    
+    @staticmethod
+    def parse_rgb_input(input_text, is_rgb256=True):
+        """
+        Parse RGB color input with various formats and delimiters.
+        
+        Supported formats:
+        - Bare-bones: 0.157, 0.549, 0.922 (newline delimiter only)
+        - Parentheses: (0.157, 0.549, 0.922)
+        - Brackets: [0.157, 0.549, 0.922]  
+        - Braces: {0.157, 0.549, 0.922}
+        - RGB with parentheses: rgb(0.157, 0.549, 0.922)
+        - RGB with brackets: rgb[0.157, 0.549, 0.922]
+        - RGB with braces: rgb{0.157, 0.549, 0.922}
+        
+        Color delimiters (colors are separated by):
+        - newline
+        - comma+newline  
+        - semicolon+newline
+        
+        Args:
+            input_text: Input string containing RGB values
+            is_rgb256: True for 0-255 range, False for 0-1 range
+        """
+        if not input_text or not input_text.strip():
+            return []
+        
+        import re
+        
+        # Split by color delimiters: newline, comma+newline, semicolon+newline
+        # Split on: newline OR comma followed by newline OR semicolon followed by newline
+        lines = re.split(r'(?:,\s*\n|\;\s*\n|\n)', input_text.strip())
+        
+        cleaned_colors = []
+        for line in lines:
+            line = line.strip().rstrip(',;')  # Remove trailing delimiters
+            if not line:
+                continue
+                
+            # Extract RGB values using regex patterns
+            rgb_values = ColorInputAdapter._extract_rgb_values(line)
+            if rgb_values and len(rgb_values) == 3:
+                try:
+                    if is_rgb256:
+                        # Validate RGB256 range (0-255)
+                        vals = tuple(int(float(v)) for v in rgb_values)
+                        if all(0 <= v <= 255 for v in vals):
+                            cleaned_colors.append(vals)
+                    else:
+                        # Validate RGB01 range (0-1)
+                        vals = tuple(float(v) for v in rgb_values)
+                        if all(0.0 <= v <= 1.0 for v in vals):
+                            cleaned_colors.append(vals)
+                except (ValueError, TypeError):
+                    continue  # Skip invalid values
+        
+        return cleaned_colors
+    
+    @staticmethod
+    def _extract_rgb_values(line):
+        """
+        Extract RGB numeric values from a line with various bracket formats.
+        Returns list of 3 numeric strings or None if not found.
+        """
+        import re
+        
+        # Pattern to match RGB values in various formats:
+        # - rgb(1, 2, 3) or RGB(1, 2, 3)
+        # - rgb[1, 2, 3] or RGB[1, 2, 3]  
+        # - rgb{1, 2, 3} or RGB{1, 2, 3}
+        # - (1, 2, 3)
+        # - [1, 2, 3]
+        # - {1, 2, 3}
+        # - 1, 2, 3 (bare-bones)
+        
+        # Try RGB prefix patterns first (case insensitive)
+        rgb_patterns = [
+            r'(?i)rgb\s*\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)',  # rgb(r,g,b)
+            r'(?i)rgb\s*\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]',  # rgb[r,g,b]
+            r'(?i)rgb\s*\{\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\}',  # rgb{r,g,b}
+        ]
+        
+        for pattern in rgb_patterns:
+            match = re.search(pattern, line)
+            if match:
+                return [match.group(1), match.group(2), match.group(3)]
+        
+        # Try bracket patterns without rgb prefix
+        bracket_patterns = [
+            r'\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\)',  # (r,g,b)
+            r'\[\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\]',  # [r,g,b]
+            r'\{\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*\}',  # {r,g,b}
+        ]
+        
+        for pattern in bracket_patterns:
+            match = re.search(pattern, line)
+            if match:
+                return [match.group(1), match.group(2), match.group(3)]
+        
+        # Try bare-bones format (just numbers and commas)
+        bare_pattern = r'^\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)\s*$'
+        match = re.match(bare_pattern, line)
+        if match:
+            return [match.group(1), match.group(2), match.group(3)]
+        
+        return None

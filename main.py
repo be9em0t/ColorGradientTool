@@ -25,6 +25,7 @@
 import sys
 import math
 import os
+import platform
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QColorDialog,
     QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit
@@ -35,11 +36,43 @@ from pathlib import Path
 
 # Import our modules
 from color import (
-    interpolate, format_color_list, ColorParser, 
+    interpolate, format_color_list, ColorParser, ColorInputAdapter,
     lerp, parse_hex_string, hex_to_rgb01, rgb01_to_hex,
     format_rgb01_from_tuple, format_rgb256_from_tuple
 )
 from settings import Settings
+
+
+def get_platform_font_family():
+    """
+    Return the appropriate font family for the current platform.
+    
+    Returns:
+        str: Font family string for CSS/Qt stylesheet usage
+    """
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return '"Helvetica Neue", Arial, sans-serif'
+    elif system == "Windows":
+        return '"Segoe UI", Arial, sans-serif'
+    else:  # Linux and others
+        return '"Ubuntu", "Liberation Sans", Arial, sans-serif'
+
+
+def get_platform_monospace_font():
+    """
+    Return the appropriate monospace font family for the current platform.
+    
+    Returns:
+        str: Monospace font family string for CSS/Qt stylesheet usage
+    """
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return 'Monaco, "Courier New", monospace'
+    elif system == "Windows":
+        return '"Consolas", "Courier New", monospace'
+    else:  # Linux and others
+        return '"Ubuntu Mono", "Liberation Mono", "Courier New", monospace'
 
 
 def get_config_path():
@@ -211,18 +244,18 @@ class MultilineEdit(QTextEdit):
     def set_source_highlight(self, is_source=False):
         """Set visual indication that this box is the source for conversion"""
         # Define the base style
-        base_style = """
-            QTextEdit {
+        base_style = f"""
+            QTextEdit {{
                 background-color: #3a4a56;
-                border-radius: 4px;
-                padding: 4px 8px;
+                border-radius: 5px;
+                padding: 1px 1px 1px 6px;
                 color: #eaeff2;
-                font-family: monospace;
+                font-family: {get_platform_monospace_font()};
                 selection-background-color: #4a5a66;
-            }
-            QTextEdit:focus {
+            }}
+            QTextEdit:focus {{
                 border: 2px solid #eaeff2;
-            }
+            }}
         """
         
         if is_source:
@@ -242,19 +275,20 @@ class MultilineEdit(QTextEdit):
     
     def set_error_style(self):
         """Set error styling for conversion failures"""
-        error_style = """
-            QTextEdit {
+        # padding: 4px 8px;
+        error_style = f"""
+            QTextEdit {{
                 background-color: #3a4a56;
                 border: 2px solid #d9534f;
-                border-radius: 4px;
-                padding: 4px 8px;
+                border-radius: 5px;
+                padding: 1px 1px 1px 6px;
                 color: #eaeff2;
-                font-family: monospace;
+                font-family: {get_platform_monospace_font()};
                 selection-background-color: #4a5a66;
-            }
-            QTextEdit:focus {
+            }}
+            QTextEdit:focus {{
                 border: 2px solid #d9534f;
-            }
+            }}
         """
         self.setStyleSheet(error_style)
     
@@ -294,7 +328,7 @@ class ColorTile(QPushButton):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Color Gradient Tool — coloraide")
+        self.setWindowTitle("Color Gradient Tool")
         
         # Set window icon (relative to script folder)
         try:
@@ -568,12 +602,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         conv_layout = QGridLayout()
         # tighten vertical spacing so converter labels sit closer to boxes
         conv_layout.setVerticalSpacing(6)
-        # Converter area: three multiline boxes for Hex, RGB(256), RGB(0-1)
+        # Converter area: three multiline boxes for Hex, RGB 256, RGB 0-1
         lbl_hex = QLabel('Hex')
         lbl_hex.setStyleSheet('color: #eaeff2;')
-        lbl_rgb256 = QLabel('RGB(256)')
+        lbl_rgb256 = QLabel('RGB 256')
         lbl_rgb256.setStyleSheet('color: #eaeff2;')
-        lbl_rgb01 = QLabel('RGB(0-1)')
+        lbl_rgb01 = QLabel('RGB 0-1 ')
         lbl_rgb01.setStyleSheet('color: #eaeff2;')
 
         self.conv_hex = MultilineEdit()
@@ -612,9 +646,23 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         def on_convert_from_hex():
             src = self.conv_hex
             src.clear_error_style()
-            lines = [l.strip() for l in self.conv_hex.toPlainText().splitlines() if l.strip()]
+            input_text = self.conv_hex.toPlainText()
             try:
-                hexs, r256, r01 = ColorParser.parse_hex_lines(lines)
+                # Use the new ColorInputAdapter for flexible parsing
+                hex_colors = ColorInputAdapter.parse_hex_input(input_text)
+                if not hex_colors:
+                    raise ValueError('No valid hex colors found')
+                
+                # Convert to all formats
+                hexs = hex_colors
+                r256 = []
+                r01 = []
+                for hex_color in hex_colors:
+                    r01_tuple = hex_to_rgb01(hex_color)
+                    r01.append(format_rgb01_from_tuple(r01_tuple))
+                    r256_tuple = tuple(int(round(x*255)) for x in r01_tuple)
+                    r256.append(format_rgb256_from_tuple(r256_tuple))
+                
             except Exception as e:
                 src.set_error_style()
                 self.status.showMessage(f'Conversion failed: invalid Hex input. {e}')
@@ -631,12 +679,26 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         def on_convert_from_rgb256():
             src = self.conv_rgb256 
             src.clear_error_style()
-            lines = [l.strip() for l in self.conv_rgb256.toPlainText().splitlines() if l.strip()]
+            input_text = self.conv_rgb256.toPlainText()
             try:
-                hexs, r256, r01 = ColorParser.parse_rgb256_lines(lines)
+                # Use the new ColorInputAdapter for flexible parsing
+                rgb256_tuples = ColorInputAdapter.parse_rgb_input(input_text, is_rgb256=True)
+                if not rgb256_tuples:
+                    raise ValueError('No valid RGB 256 colors found')
+                
+                # Convert to all formats
+                hexs = []
+                r256 = []
+                r01 = []
+                for rgb256_tuple in rgb256_tuples:
+                    r256.append(format_rgb256_from_tuple(rgb256_tuple))
+                    r01_tuple = tuple(v/255.0 for v in rgb256_tuple)
+                    r01.append(format_rgb01_from_tuple(r01_tuple))
+                    hexs.append(rgb01_to_hex(r01_tuple))
+                
             except Exception as e:
                 src.set_error_style()
-                self.status.showMessage(f'Conversion failed: invalid RGB(256) input. {e}')
+                self.status.showMessage(f'Conversion failed: invalid RGB 256 input. {e}')
                 return
             # success - clear any error styles and restore normal styling
             self.conv_hex.clear_error_style()
@@ -645,18 +707,33 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.conv_hex.setPlainText('\n'.join(hexs))
             self.conv_rgb256.setPlainText('\n'.join(r256))
             self.conv_rgb01.setPlainText('\n'.join(r01))
-            self.status.showMessage(f'Converted {len(hexs)} lines from RGB(256).')
+            self.status.showMessage(f'Converted {len(hexs)} lines from RGB 256.')
 
         def on_convert_from_rgb01():
             src = self.conv_rgb01
             src.clear_error_style()
-            lines = [l.strip() for l in self.conv_rgb01.toPlainText().splitlines() if l.strip()]
+            input_text = self.conv_rgb01.toPlainText()
             try:
-                hexs, r256, r01 = ColorParser.parse_rgb01_lines(lines)
+                # Use the new ColorInputAdapter for flexible parsing
+                rgb01_tuples = ColorInputAdapter.parse_rgb_input(input_text, is_rgb256=False)
+                if not rgb01_tuples:
+                    raise ValueError('No valid RGB 0-1 colors found')
+                
+                # Convert to all formats
+                hexs = []
+                r256 = []
+                r01 = []
+                for rgb01_tuple in rgb01_tuples:
+                    r01.append(format_rgb01_from_tuple(rgb01_tuple))
+                    r256_tuple = tuple(int(round(v*255)) for v in rgb01_tuple)
+                    r256.append(format_rgb256_from_tuple(r256_tuple))
+                    hexs.append(rgb01_to_hex(rgb01_tuple))
+                
             except Exception as e:
                 src.set_error_style()
-                self.status.showMessage(f'Conversion failed: invalid RGB(0-1) input. {e}')
+                self.status.showMessage(f'Conversion failed: invalid RGB 0-1 input. {e}')
                 return
+            
             # Ensure RGB(0-1) output has leading zeros for floats
             r01_with_leading = []
             for line in r01:
@@ -681,7 +758,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.conv_hex.setPlainText('\n'.join(hexs))
             self.conv_rgb256.setPlainText('\n'.join(r256))
             self.conv_rgb01.setPlainText('\n'.join(r01_with_leading))
-            self.status.showMessage(f'Converted {len(hexs)} lines from RGB(0-1).')
+            self.status.showMessage(f'Converted {len(hexs)} lines from RGB 0-1.')
 
         # Single Convert button (will act on focused box or first non-empty)
         btn_convert = QPushButton('Convert colors')
@@ -693,6 +770,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
                 border: 1px solid #555;
                 border-radius: 4px;
                 padding: 4px 8px;
+                margin: 8px 0px 0px 0px;
                 color: #eaeff2;
             }
             QPushButton:hover {
@@ -1308,33 +1386,33 @@ if __name__ == '__main__':
     except Exception:
         # If pyobjc isn't installed or something else fails, ignore.
         pass
-    app.setStyleSheet("""
-        QWidget { background: #28333b; color: #fff; font-family: "Segoe UI", Roboto, Arial; }
-        QLabel { color: #eaeff2; font-size: 14px; }
+    app.setStyleSheet(f"""
+        QWidget {{ background: #28333b; color: #fff; font-family: {get_platform_font_family()}; }}
+        QLabel {{ color: #eaeff2; font-size: 14px; }}
         /* Scrollbar styling to match controls */
-        QScrollBar:vertical {
+        QScrollBar:vertical {{
             background: #2b3a42;
             width: 12px;
             margin: 0px 0px 0px 0px;
-        }
-        QScrollBar::handle:vertical {
+        }}
+        QScrollBar::handle:vertical {{
             background: #3a4a56;
             min-height: 20px;
             border: 1px solid #555;
             border-radius: 4px;
-        }
-        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-        QScrollBar:horizontal {
+        }}
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
+        QScrollBar:horizontal {{
             background: #2b3a42;
             height: 12px;
             margin: 0px 0px 0px 0px;
-        }
-        QScrollBar::handle:horizontal {
+        }}
+        QScrollBar::handle:horizontal {{
             background: #3a4a56;
             min-width: 20px;
             border: 1px solid #555;
             border-radius: 4px;
-        }
+        }}
     """)
     w = MainWindow()
     w.show()
