@@ -166,4 +166,9 @@ The application stores its settings in different locations depending on how it's
 - PySide6: 6.5.0+
 - coloraide: 3.0.0+
 
+## Git release
+- MacOS: zip the bundle:
+zip -r ColorGradientTool-macOS-arm64.zip ColorGradientTool.app
+
+
 For questions or issues, refer to the main project documentation.
