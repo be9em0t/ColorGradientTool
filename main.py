@@ -1390,8 +1390,23 @@ if __name__ == '__main__':
         # If pyobjc isn't installed or something else fails, ignore.
         pass
     app.setStyleSheet(f"""
-        QWidget {{ background: #28333b; color: #fff; font-family: {get_platform_font_family()}; }}
-        QLabel {{ color: #eaeff2; font-size: 14px; }}
+        QWidget {{ 
+            background: #28333b; 
+            color: #fff; 
+            font-family: {get_platform_font_family()}; }}
+        QLabel {{ 
+            color: #eaeff2; 
+            font-size: 14px; }}
+        /* Tooltip styling for better readability */
+        QToolTip {{
+            background-color: #2b3a42;
+            color: #eaeff2;
+            border: 1px solid #555;
+            border-radius: 6px;
+            padding: 1px;
+            font-size: 8px;
+            font-family: {get_platform_font_family()};
+        }}
         /* Scrollbar styling to match controls */
         QScrollBar:vertical {{
             background: #2b3a42;
