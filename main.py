@@ -151,6 +151,7 @@ class GradientPreview(QLabel):
 class MultilineEdit(QTextEdit):
     """QTextEdit that emits editingFinished on focus out, Ctrl+Enter, or Enter when single-line."""
     editingFinished = Signal()
+    focusChanged = Signal(bool)  # Signal for focus changes
     
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -159,10 +160,21 @@ class MultilineEdit(QTextEdit):
             self.setAcceptRichText(False)
         except Exception:
             pass
+        self._is_focused = False
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._is_focused = True
+        try:
+            self.focusChanged.emit(True)
+        except Exception:
+            pass
 
     def focusOutEvent(self, event):
         super().focusOutEvent(event)
+        self._is_focused = False
         try:
+            self.focusChanged.emit(False)
             self.editingFinished.emit()
         except Exception:
             pass
@@ -195,6 +207,60 @@ class MultilineEdit(QTextEdit):
         except Exception:
             # Fallback to default behavior
             super().insertFromMimeData(source)
+
+    def set_source_highlight(self, is_source=False):
+        """Set visual indication that this box is the source for conversion"""
+        # Define the base style
+        base_style = """
+            QTextEdit {
+                background-color: #3a4a56;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #eaeff2;
+                font-family: monospace;
+                selection-background-color: #4a5a66;
+            }
+            QTextEdit:focus {
+                border: 2px solid #eaeff2;
+            }
+        """
+        
+        if is_source:
+            # Source highlighting with blue border
+            source_style = base_style.replace(
+                'border-radius: 4px;',
+                'border: 2px solid #4588C4;\n                border-radius: 4px;'
+            )
+            self.setStyleSheet(source_style)
+        else:
+            # Normal style with subtle border
+            normal_style = base_style.replace(
+                'border-radius: 4px;',
+                'border: 1px solid #555;\n                border-radius: 4px;'
+            )
+            self.setStyleSheet(normal_style)
+    
+    def set_error_style(self):
+        """Set error styling for conversion failures"""
+        error_style = """
+            QTextEdit {
+                background-color: #3a4a56;
+                border: 2px solid #d9534f;
+                border-radius: 4px;
+                padding: 4px 8px;
+                color: #eaeff2;
+                font-family: monospace;
+                selection-background-color: #4a5a66;
+            }
+            QTextEdit:focus {
+                border: 2px solid #d9534f;
+            }
+        """
+        self.setStyleSheet(error_style)
+    
+    def clear_error_style(self):
+        """Clear error styling and return to normal"""
+        self.set_source_highlight(False)
 
 
 class ColorTile(QPushButton):
@@ -513,6 +579,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.conv_hex = MultilineEdit()
         self.conv_rgb256 = MultilineEdit()
         self.conv_rgb01 = MultilineEdit()
+        
+        # Apply initial styling using the new methods
+        self.conv_hex.set_source_highlight(False)
+        self.conv_rgb256.set_source_highlight(False)
+        self.conv_rgb01.set_source_highlight(False)
+        
         # Limit box height to ~4 lines so scrollbar appears for longer lists
         fm = self.conv_hex.fontMetrics()
         line_h = fm.lineSpacing()
@@ -539,18 +611,18 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Conversion handlers
         def on_convert_from_hex():
             src = self.conv_hex
-            src.setStyleSheet('')
+            src.clear_error_style()
             lines = [l.strip() for l in self.conv_hex.toPlainText().splitlines() if l.strip()]
             try:
                 hexs, r256, r01 = ColorParser.parse_hex_lines(lines)
             except Exception as e:
-                src.setStyleSheet('border: 2px solid #d9534f;')
+                src.set_error_style()
                 self.status.showMessage(f'Conversion failed: invalid Hex input. {e}')
                 return
-            # success - clear any error outlines
-            self.conv_hex.setStyleSheet('')
-            self.conv_rgb256.setStyleSheet('')
-            self.conv_rgb01.setStyleSheet('')
+            # success - clear any error styles and restore normal styling
+            self.conv_hex.clear_error_style()
+            self.conv_rgb256.clear_error_style()
+            self.conv_rgb01.clear_error_style()
             self.conv_hex.setPlainText('\n'.join(hexs))
             self.conv_rgb256.setPlainText('\n'.join(r256))
             self.conv_rgb01.setPlainText('\n'.join(r01))
@@ -558,18 +630,18 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
 
         def on_convert_from_rgb256():
             src = self.conv_rgb256 
-            src.setStyleSheet('')
+            src.clear_error_style()
             lines = [l.strip() for l in self.conv_rgb256.toPlainText().splitlines() if l.strip()]
             try:
                 hexs, r256, r01 = ColorParser.parse_rgb256_lines(lines)
             except Exception as e:
-                src.setStyleSheet('border: 2px solid #d9534f;')
+                src.set_error_style()
                 self.status.showMessage(f'Conversion failed: invalid RGB(256) input. {e}')
                 return
-            # success - clear any error outlines
-            self.conv_hex.setStyleSheet('')
-            self.conv_rgb256.setStyleSheet('')
-            self.conv_rgb01.setStyleSheet('')
+            # success - clear any error styles and restore normal styling
+            self.conv_hex.clear_error_style()
+            self.conv_rgb256.clear_error_style()
+            self.conv_rgb01.clear_error_style()
             self.conv_hex.setPlainText('\n'.join(hexs))
             self.conv_rgb256.setPlainText('\n'.join(r256))
             self.conv_rgb01.setPlainText('\n'.join(r01))
@@ -577,12 +649,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
 
         def on_convert_from_rgb01():
             src = self.conv_rgb01
-            src.setStyleSheet('')
+            src.clear_error_style()
             lines = [l.strip() for l in self.conv_rgb01.toPlainText().splitlines() if l.strip()]
             try:
                 hexs, r256, r01 = ColorParser.parse_rgb01_lines(lines)
             except Exception as e:
-                src.setStyleSheet('border: 2px solid #d9534f;')
+                src.set_error_style()
                 self.status.showMessage(f'Conversion failed: invalid RGB(0-1) input. {e}')
                 return
             # Ensure RGB(0-1) output has leading zeros for floats
@@ -602,10 +674,10 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
                         formatted.append(p)
                 r01_with_leading.append(', '.join(formatted))
 
-            # success - clear any error outlines
-            self.conv_hex.setStyleSheet('')
-            self.conv_rgb256.setStyleSheet('')
-            self.conv_rgb01.setStyleSheet('')
+            # success - clear any error styles and restore normal styling
+            self.conv_hex.clear_error_style()
+            self.conv_rgb256.clear_error_style()
+            self.conv_rgb01.clear_error_style()
             self.conv_hex.setPlainText('\n'.join(hexs))
             self.conv_rgb256.setPlainText('\n'.join(r256))
             self.conv_rgb01.setPlainText('\n'.join(r01_with_leading))
@@ -631,35 +703,74 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             }
         """)
 
+        def update_source_highlighting(source_box):
+            """Update visual highlighting to show which box is the conversion source"""
+            # Clear all highlights first
+            self.conv_hex.set_source_highlight(False)
+            self.conv_rgb256.set_source_highlight(False)
+            self.conv_rgb01.set_source_highlight(False)
+            
+            # Highlight the source box
+            if source_box:
+                source_box.set_source_highlight(True)
+
         def on_convert_focused():
             # Try focused widget first
             fw = QApplication.focusWidget()
+            source_box = None
+            
             if fw is self.conv_hex:
+                source_box = self.conv_hex
                 on_convert_from_hex()
-                return
-            if fw is self.conv_rgb256:
+            elif fw is self.conv_rgb256:
+                source_box = self.conv_rgb256
                 on_convert_from_rgb256()
-                return
-            if fw is self.conv_rgb01:
+            elif fw is self.conv_rgb01:
+                source_box = self.conv_rgb01
                 on_convert_from_rgb01()
-                return
-            # Otherwise pick the first non-empty box
-            if self.conv_hex.toPlainText().strip():
-                on_convert_from_hex(); return
-            if self.conv_rgb256.toPlainText().strip():
-                on_convert_from_rgb256(); return
-            if self.conv_rgb01.toPlainText().strip():
-                on_convert_from_rgb01(); return
-            # default
-            on_convert_from_hex()
+            else:
+                # Otherwise pick the first non-empty box
+                if self.conv_hex.toPlainText().strip():
+                    source_box = self.conv_hex
+                    on_convert_from_hex()
+                elif self.conv_rgb256.toPlainText().strip():
+                    source_box = self.conv_rgb256
+                    on_convert_from_rgb256()
+                elif self.conv_rgb01.toPlainText().strip():
+                    source_box = self.conv_rgb01
+                    on_convert_from_rgb01()
+                else:
+                    # default
+                    source_box = self.conv_hex
+                    on_convert_from_hex()
+            
+            # Update visual highlighting
+            update_source_highlighting(source_box)
 
         btn_convert.clicked.connect(on_convert_focused)
         conv_layout.addWidget(btn_convert, 2, 1, alignment=Qt.AlignCenter)
 
         # Connect editingFinished signals (Enter/focus-out)
-        self.conv_hex.editingFinished.connect(on_convert_from_hex)
-        self.conv_rgb256.editingFinished.connect(on_convert_from_rgb256)
-        self.conv_rgb01.editingFinished.connect(on_convert_from_rgb01)
+        self.conv_hex.editingFinished.connect(lambda: (on_convert_from_hex(), update_source_highlighting(self.conv_hex)))
+        self.conv_rgb256.editingFinished.connect(lambda: (on_convert_from_rgb256(), update_source_highlighting(self.conv_rgb256)))
+        self.conv_rgb01.editingFinished.connect(lambda: (on_convert_from_rgb01(), update_source_highlighting(self.conv_rgb01)))
+        
+        # Connect focus tracking for visual feedback
+        def on_hex_focus_changed(has_focus):
+            if has_focus and self.conv_hex.toPlainText().strip():
+                update_source_highlighting(self.conv_hex)
+        
+        def on_rgb256_focus_changed(has_focus):
+            if has_focus and self.conv_rgb256.toPlainText().strip():
+                update_source_highlighting(self.conv_rgb256)
+        
+        def on_rgb01_focus_changed(has_focus):
+            if has_focus and self.conv_rgb01.toPlainText().strip():
+                update_source_highlighting(self.conv_rgb01)
+        
+        self.conv_hex.focusChanged.connect(on_hex_focus_changed)
+        self.conv_rgb256.focusChanged.connect(on_rgb256_focus_changed)
+        self.conv_rgb01.focusChanged.connect(on_rgb01_focus_changed)
         
         # Save converter_hex content when it changes
         def save_converter_hex():

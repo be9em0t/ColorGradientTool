@@ -145,12 +145,19 @@ The application stores its settings in different locations depending on how it's
 - Resource paths are relative to the project directory
 - Hidden imports include all necessary PySide6 and coloraide modules
 - Excluded modules (tkinter, matplotlib, etc.) reduce file size
+- **Enhanced UI styling**: Conversion boxes use consistent theming with robust error handling
+- **Focus highlighting**: Visual feedback shows active conversion source with blue borders
 
 ### Git Workflow
 - **Tracked**: Source code, spec files, build scripts, documentation
 - **Ignored**: Build artifacts (`build/`, `dist/`), Python cache, temporary files
 - The `.gitignore` is configured to properly handle PyInstaller builds
 - Spec files (`.spec`) are tracked since they contain important build configuration
+
+### UI Styling System
+- **Consistent theming**: All UI elements use the same color palette (`#3a4a56`, `#eaeff2`, etc.)
+- **Robust styling**: Conversion boxes maintain appearance through all states (normal, focused, error, source)
+- **Visual feedback**: Clear indication of focus, errors, and conversion source with color-coded borders
 
 ## Version Information
 
