@@ -167,8 +167,11 @@ The application stores its settings in different locations depending on how it's
 - coloraide: 3.0.0+
 
 ## Git release
-- MacOS: zip the bundle:
-zip -r ColorGradientTool-macOS-arm64.zip ColorGradientTool.app
+- Run the tests first: `python -m unittest discover -s tests -t .`
+- Restore `ColorGradient.ini` if the run changed it (the app rewrites it; it is bundled as the default settings).
+- MacOS: zip the bundle from `dist/` (`ditto` keeps the bundle intact):
+  `cd dist && ditto -c -k --keepParent ColorGradientTool.app ColorGradientTool-macOS-arm64.zip`
+- Publish: `gh release create vX.Y.Z dist/ColorGradientTool-macOS-arm64.zip --title ... --notes ...`
 
 
 For questions or issues, refer to the main project documentation.

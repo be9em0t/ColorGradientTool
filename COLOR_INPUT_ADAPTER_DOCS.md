@@ -10,7 +10,7 @@ The `ColorInputAdapter` class provides enhanced input parsing capabilities for t
 - **Flexible brackets**: Handles parentheses `()`, brackets `[]`, and braces `{}`
 - **Case-insensitive RGB prefix**: Accepts `rgb`, `RGB`, `Rgb`, etc.
 - **Backward compatibility**: Works with existing copy formats from the tool
-- **Non-destructive**: Does not modify existing code - implemented as separate adapter functions
+- **Strict**: invalid input is reported with its line number, never silently dropped
 
 ## Supported Formats
 
@@ -166,14 +166,23 @@ The adapter functions return data in formats compatible with existing parsing fu
 - `parse_hex_input()` returns a list of normalized hex strings (e.g., `['#rrggbb', ...]`)
 - `parse_rgb_input()` returns a list of tuples (e.g., `[(r,g,b), ...]`)
 
-These can be directly used with existing `ColorParser` methods or converted using existing utility functions like `format_rgb01_from_tuple()` and `format_rgb256_from_tuple()`.
+Output lines are produced by `format_color_line(hex_color, format_type)` (`"Hex"`, `"RGB 256"`, `"RGB 0-1"`), the same function used by the swatch boxes and the Copy button, so copy and paste round-trip exactly.
 
 ## Error Handling
 
-- Invalid colors are silently skipped (no exceptions thrown)
-- Empty input returns empty list
-- Out-of-range values are ignored
-- Malformed lines are skipped
+Parsing is **strict**: nothing is skipped or guessed.
+
+- If any line is invalid, the parser raises `ValueError("line N: ...")` naming the first bad line.
+- In the app, a rejected box turns red, the status bar shows the reason, and your text is left untouched.
+- RGB 256 accepts integers 0-255 only (no decimals); RGB 0-1 accepts values 0-1 only.
+- Blank lines are ignored; empty input returns an empty list.
+
+```python
+try:
+    ColorInputAdapter.parse_hex_input("#288ceb\nnot-a-color")
+except ValueError as ex:
+    print(ex)   # line 2: ...
+```
 
 ## Backward Compatibility
 
@@ -183,4 +192,4 @@ The adapter functions fully support the current "Copy colors" output formats:
 - **RGB 256**: `rgb(40, 140, 235)\nrgb(167, 120, 174)\nrgb(225, 94, 30)` ✓
 - **RGB 0-1**: `rgb(0.157, 0.549, 0.922)\nrgb(0.655, 0.471, 0.682)\nrgb(0.882, 0.369, 0.118)` ✓
 
-This means users can now copy colors from the tool and paste them back into conversion boxes without formatting issues.
+Users can copy colors from the tool and paste them back into conversion boxes without formatting issues.

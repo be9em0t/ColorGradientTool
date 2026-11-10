@@ -59,10 +59,10 @@ app = BUNDLE(
     name='ColorGradientTool.app',
     icon=os.path.join(base_dir, 'resources', 'ColorGradientTool_icon.png'),
     bundle_identifier='com.yourcompany.colorgradienttool',
-    version='1.0.0',
+    version='1.2.0',
     info_plist={
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '1.0.0',
+        'CFBundleShortVersionString': '1.2.0',
+        'CFBundleVersion': '1.2.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15',  # macOS Catalina
     }
