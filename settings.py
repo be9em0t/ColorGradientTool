@@ -35,7 +35,8 @@ class Settings:
             'CIE Lab': 'lab',
             'HWB (Hue‑Whiteness‑Blackness)': 'hwb',
             'HSL (Hue‑Saturation‑Lightness)': 'hsl',
-            'sRGB': 'srgb',
+            'sRGB (gamma)': 'srgb',
+            'sRGB (linear light)': 'srgb-linear',
         }
     
     def load(self):

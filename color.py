@@ -125,101 +125,78 @@ def hex_to_rgb01_string(hex_color):
     return f"rgb({r:.3f}, {g:.3f}, {b:.3f})"
 
 
-def format_color_list(colors, format_type):
-    """Convert a list of hex colors to the specified format"""
+def format_color_line(hex_color, format_type):
+    """Format one hex color as a single text line in the given format.
+
+    The same lines are used for the list boxes and for Copy colors, so what
+    you see is exactly what you copy. Raises ValueError for an unknown format.
+    """
+    r01 = hex_to_rgb01(hex_color)
     if format_type == "Hex":
-        return colors
-    elif format_type == "RGB 256":
-        return [hex_to_rgb256(color) for color in colors]
-    elif format_type == "RGB 0-1":
-        return [hex_to_rgb01_string(color) for color in colors]
-    else:
-        return colors
+        return parse_hex_string(hex_color)
+    if format_type == "RGB 256":
+        return format_rgb256_from_tuple(tuple(int(round(x * 255)) for x in r01))
+    if format_type == "RGB 0-1":
+        return format_rgb01_from_tuple(r01)
+    raise ValueError(f"Unknown color format: {format_type!r}")
 
 
-CYLINDRICAL_SPACES = {'lch', 'oklch', 'hsl', 'hwb', 'hsv'}
+def format_color_list(colors, format_type):
+    """Convert a list of hex colors to a list of text lines in the given format."""
+    return [format_color_line(c, format_type) for c in colors]
 
 
-def interpolate_coloraide(hex_a, hex_b, steps, space):
-    """
-    General-purpose interpolation using coloraide.
-    space: e.g. 'oklch', 'oklab', 'lch', 'lab', 'hsl', 'hwb', 'srgb'
-    Returns list of hex strings length == steps
-    """
-    ca = Color(hex_a)
-    cb = Color(hex_b)
-    # Convert endpoints into desired space
-    a_conv = ca.convert(space)
-    b_conv = cb.convert(space)
-
-    a_coords = list(a_conv.coords())
-    b_coords = list(b_conv.coords())
-
-    out = []
-    is_cyl = space.lower() in CYLINDRICAL_SPACES
-    hue_index = (len(a_coords) - 1) if is_cyl else None
-
-    for i in range(steps):
-        t = i / (steps - 1) if steps > 1 else 0
-        coords = []
-        for j in range(len(a_coords)):
-            if j == hue_index:
-                a_h = (a_coords[j] % 360)
-                b_h = (b_coords[j] % 360)
-                h = shortest_angle_interp(a_h, b_h, t)
-                coords.append(h)
-            else:
-                coords.append(lerp(a_coords[j], b_coords[j], t))
-        try:
-            c = Color(space, coords)
-            # Fit to sRGB if out of gamut for display
-            if not c.in_gamut('srgb'):
-                c = c.fit('srgb')
-            hex_out = c.convert('srgb').to_string(hex=True)
-            out.append(hex_out)
-        except Exception:
-            # fallback to endpoints if something fails
-            out.append(hex_a if t < 0.5 else hex_b)
-    return out
-
-
-def interpolate_srgb_linear(hex_a, hex_b, steps):
-    """
-    Interpolate in linear sRGB space (physically additive) using correct sRGB linearization.
-    """
-    ar, ag, ab = hex_to_rgb01(hex_a)
-    br, bg, bb = hex_to_rgb01(hex_b)
-    la = (srgb_comp_to_linear(ar), srgb_comp_to_linear(ag), srgb_comp_to_linear(ab))
-    lb = (srgb_comp_to_linear(br), srgb_comp_to_linear(bg), srgb_comp_to_linear(bb))
-    out = []
-    for i in range(steps):
-        t = i / (steps - 1) if steps > 1 else 0
-        lr = lerp(la[0], lb[0], t)
-        lg = lerp(la[1], lb[1], t)
-        lbv = lerp(la[2], lb[2], t)
-        r = linear_comp_to_srgb(lr)
-        g = linear_comp_to_srgb(lg)
-        b = linear_comp_to_srgb(lbv)
-        out.append(rgb01_to_hex((r, g, b)))
-    return out
+# Friendly/internal model key -> ColorAide space id.
+# 'srgb' is plain gamma-encoded sRGB (what most tools call "RGB interpolation");
+# 'srgb-linear' is physically additive light.
+INTERPOLATION_SPACES = {
+    'oklch': 'oklch',
+    'oklab': 'oklab',
+    'lch': 'lch',
+    'lab': 'lab',
+    'hsl': 'hsl',
+    'hwb': 'hwb',
+    'srgb': 'srgb',
+    'srgb-linear': 'srgb-linear',
+}
 
 
 def interpolate(hex_a, hex_b, steps, mode):
-    m = mode.lower()
-    if m == 'srgb' or m == 'rgb':
-        return interpolate_srgb_linear(hex_a, hex_b, steps)
-    # For everything else use coloraide's conversions and fitting
-    # Map friendly names to coloraide spaces
-    mapping = {
-        'oklch': 'oklch',
-        'oklab': 'oklab',
-        'lch': 'lch',
-        'lab': 'lab',
-        'hsl': 'hsl',
-        'hwb': 'hwb',
-    }
-    space = mapping.get(m, m)
-    return interpolate_coloraide(hex_a, hex_b, steps, space)
+    """Return `steps` hex colors from hex_a to hex_b, interpolated in `mode`.
+
+    - Cylindrical spaces take the shortest hue path; ColorAide knows where hue
+      lives in each space and treats neutral (hue-less) colors correctly.
+    - The first and last colors are always exactly the requested endpoints.
+    - Out-of-gamut results are gamut-mapped into sRGB.
+    - Nothing is swallowed: bad input or a failure raises ValueError, so the
+      caller can show it instead of displaying wrong colors.
+    """
+    if steps < 2:
+        raise ValueError(f"A gradient needs at least 2 steps, got {steps}")
+    key = str(mode).strip().lower()
+    if key == 'rgb':
+        key = 'srgb'
+    space = INTERPOLATION_SPACES.get(key)
+    if space is None:
+        raise ValueError(f"Unknown color model: {mode!r}")
+
+    start = parse_hex_string(hex_a)
+    end = parse_hex_string(hex_b)
+    try:
+        ramp = Color.interpolate([start, end], space=space, hue='shorter')
+        out = []
+        for i in range(steps):
+            c = ramp(i / (steps - 1)).convert('srgb')
+            if not c.in_gamut():
+                c = c.fit('srgb')
+            out.append(c.to_string(hex=True))
+    except Exception as ex:
+        raise ValueError(f"Interpolation in {space} failed: {ex}") from ex
+
+    # Pin the endpoints so rounding can never alter the colors the user chose.
+    out[0] = start
+    out[-1] = end
+    return out
 
 
 class ColorParser:
@@ -297,16 +274,16 @@ class ColorInputAdapter:
         
         # Clean and validate each color
         cleaned_colors = []
-        for color in colors:
+        for line_no, color in enumerate(colors, start=1):
             color = color.strip().rstrip(',;')  # Remove trailing delimiters
-            if color:  # Skip empty strings
-                try:
-                    # Use existing parse_hex_string function
-                    normalized_hex = parse_hex_string(color)
-                    cleaned_colors.append(normalized_hex)
-                except ValueError:
-                    continue  # Skip invalid hex colors
-        
+            if not color:  # blank lines are harmless separators
+                continue
+            try:
+                cleaned_colors.append(parse_hex_string(color))
+            except ValueError:
+                # Never drop a color silently: reject the whole input.
+                raise ValueError(f"line {line_no}: {color!r} is not a valid hex color") from None
+
         return cleaned_colors
     
     @staticmethod
@@ -342,28 +319,30 @@ class ColorInputAdapter:
         lines = re.split(r'(?:,\s*\n|\;\s*\n|\n)', input_text.strip())
         
         cleaned_colors = []
-        for line in lines:
+        for line_no, line in enumerate(lines, start=1):
             line = line.strip().rstrip(',;')  # Remove trailing delimiters
-            if not line:
+            if not line:  # blank lines are harmless separators
                 continue
-                
-            # Extract RGB values using regex patterns
+
             rgb_values = ColorInputAdapter._extract_rgb_values(line)
-            if rgb_values and len(rgb_values) == 3:
-                try:
-                    if is_rgb256:
-                        # Validate RGB256 range (0-255)
-                        vals = tuple(int(float(v)) for v in rgb_values)
-                        if all(0 <= v <= 255 for v in vals):
-                            cleaned_colors.append(vals)
-                    else:
-                        # Validate RGB01 range (0-1)
-                        vals = tuple(float(v) for v in rgb_values)
-                        if all(0.0 <= v <= 1.0 for v in vals):
-                            cleaned_colors.append(vals)
-                except (ValueError, TypeError):
-                    continue  # Skip invalid values
-        
+            if not rgb_values or len(rgb_values) != 3:
+                raise ValueError(f"line {line_no}: {line!r} is not three numbers")
+            try:
+                if is_rgb256:
+                    # RGB 256 takes whole numbers only; 255.9 is rejected, not truncated.
+                    if any('.' in v for v in rgb_values):
+                        raise ValueError("RGB 256 values must be whole numbers")
+                    vals = tuple(int(v) for v in rgb_values)
+                    if not all(0 <= v <= 255 for v in vals):
+                        raise ValueError("RGB 256 values must be 0-255")
+                else:
+                    vals = tuple(float(v) for v in rgb_values)
+                    if not all(0.0 <= v <= 1.0 for v in vals):
+                        raise ValueError("RGB 0-1 values must be between 0 and 1")
+            except ValueError as ex:
+                raise ValueError(f"line {line_no}: {line!r}: {ex}") from None
+            cleaned_colors.append(vals)
+
         return cleaned_colors
     
     @staticmethod

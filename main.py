@@ -28,7 +28,7 @@ import os
 import platform
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton, QComboBox, QColorDialog,
-    QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit
+    QHBoxLayout, QVBoxLayout, QGridLayout, QSizePolicy, QStatusBar, QTextEdit, QLineEdit, QToolButton
 )
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QPainterPath
 from PySide6.QtCore import Qt, QSize, Signal
@@ -38,7 +38,7 @@ from pathlib import Path
 from color import (
     interpolate, format_color_list, ColorParser, ColorInputAdapter,
     lerp, parse_hex_string, hex_to_rgb01, rgb01_to_hex,
-    format_rgb01_from_tuple, format_rgb256_from_tuple
+    format_rgb01_from_tuple, format_rgb256_from_tuple, format_color_line
 )
 from settings import Settings
 
@@ -328,6 +328,93 @@ class ColorTile(QPushButton):
 
 
 
+class ColorSlot(QWidget):
+    """A master color tile with a hex input box underneath it."""
+    hexCommitted = Signal(str)   # a valid, normalized '#rrggbb' was entered
+    hexRejected = Signal(str)    # the entered text is not a valid hex color
+    pickRequested = Signal()     # the picker icon was clicked
+    PICK_BTN = 24
+    ROW_GAP = 4
+
+    _EDIT_STYLE = ('QLineEdit {{ background: #20262b; color: #eaeff2; border: 1px solid {border}; '
+                   'border-radius: 4px; padding: 2px 6px; }}')
+
+    def __init__(self, tile, parent=None):
+        super().__init__(parent)
+        self.tile = tile
+        self.edit = QLineEdit(tile.hex)
+        self.edit.setPlaceholderText('#rrggbb')
+        self.edit.setMaxLength(16)
+        self.edit.setAlignment(Qt.AlignCenter)
+        self.edit.setFixedHeight(24)
+        self._set_error(False)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self.pick_btn = QToolButton()
+        self.pick_btn.setIcon(self._palette_icon())
+        self.pick_btn.setIconSize(QSize(16, 16))
+        self.pick_btn.setFixedSize(self.PICK_BTN, self.PICK_BTN)
+        self.pick_btn.setCursor(Qt.PointingHandCursor)
+        self.pick_btn.setToolTip('Pick a color…')
+        self.pick_btn.setStyleSheet(
+            'QToolButton { background: #3a4a56; border: 1px solid #555; border-radius: 4px; }'
+            'QToolButton:hover { background: #4a5a66; } QToolButton:pressed { background: #2a3a46; }')
+        self.pick_btn.clicked.connect(self.pickRequested)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(self.ROW_GAP)
+        row.addWidget(self.edit)
+        row.addWidget(self.pick_btn)
+        layout.addWidget(tile)
+        layout.addLayout(row)
+        self.edit.editingFinished.connect(self._commit)
+        self.edit.textEdited.connect(lambda _t: self._set_error(False))
+
+    @staticmethod
+    def _palette_icon():
+        """Small painter's-palette icon, drawn in code so no image asset is needed."""
+        pix = QPixmap(32, 32)
+        pix.fill(Qt.transparent)
+        p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor('#eaeff2'))
+        p.drawEllipse(2, 4, 28, 24)
+        p.setBrush(QColor('#3a4a56'))
+        p.drawEllipse(19, 17, 7, 7)  # thumb hole
+        for x, y, c in ((8, 10, '#e5484d'), (15, 7, '#f5d90a'), (22, 10, '#30a46c'), (8, 18, '#3e63dd')):
+            p.setBrush(QColor(c))
+            p.drawEllipse(x, y, 6, 6)
+        p.end()
+        return QIcon(pix)
+
+    def _set_error(self, bad):
+        self.edit.setStyleSheet(self._EDIT_STYLE.format(border='#e5484d' if bad else '#555'))
+
+    def _commit(self):
+        text = self.edit.text()
+        try:
+            hexcolor = parse_hex_string(text)
+        except ValueError:
+            self._set_error(True)
+            self.hexRejected.emit(text)
+            return
+        self._set_error(False)
+        self.edit.setText(hexcolor)
+        self.hexCommitted.emit(hexcolor)
+
+    def sync_from_tile(self):
+        """Show the tile's current color, unless the user is typing in the box."""
+        if not self.edit.hasFocus():
+            self.edit.setText(self.tile.hex)
+            self._set_error(False)
+
+    def set_width(self, width):
+        # hex box is shortened to leave room for the picker icon
+        self.edit.setFixedWidth(max(40, width - self.PICK_BTN - self.ROW_GAP))
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
@@ -360,6 +447,13 @@ class MainWindow(QWidget):
         self.tile_a = ColorTile(self.settings.color_a, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
         self.tile_b = ColorTile(self.settings.color_b, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
         self.tile_c = ColorTile(self.settings.color_c, is_master=True, master_border_color=self.settings.master_tile_border_color, border_radius=self.settings.tile_border_radius)
+        self.slot_a = ColorSlot(self.tile_a)
+        self.slot_b = ColorSlot(self.tile_b)
+        self.slot_c = ColorSlot(self.tile_c)
+        for slot, name in ((self.slot_a, 'A'), (self.slot_b, 'B'), (self.slot_c, 'C')):
+            slot.hexCommitted.connect(lambda hx, n=name: self.on_hex_entered(n, hx))
+            slot.hexRejected.connect(lambda txt, n=name: self.status.showMessage(
+                f"Color {n}: {txt!r} is not a valid hex color (use #rrggbb, rrggbb or #rgb)."))
 
         # dynamic intermediate preview tiles - use global constants
         self.min_tiles_between = MIN_TILES_BETWEEN
@@ -367,6 +461,10 @@ class MainWindow(QWidget):
         self.max_tiles_ac = MAX_TILES_AC  
         self.max_tiles_cb = MAX_TILES_CB
         
+        # A hand-edited or corrupted INI must not create an oversized layout.
+        for attr, hi in (('ab_count', self.max_tiles_ab), ('ac_count', self.max_tiles_ac), ('cb_count', self.max_tiles_cb)):
+            setattr(self.settings, attr, max(self.min_tiles_between, min(hi, getattr(self.settings, attr))))
+
         # 2-color mode: AB gradient tiles
         self.preview_tiles_ab = []
         for _ in range(self.settings.ab_count):
@@ -880,9 +978,12 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.setLayout(main_layout)
 
         # signals
-        self.tile_a.clicked.connect(self.open_color_a_dialog)
-        self.tile_b.clicked.connect(self.open_color_b_dialog)
-        self.tile_c.clicked.connect(self.open_color_c_dialog)
+        # click a master tile = copy its color; the palette icon next to the hex box opens the picker
+        for tile, name in ((self.tile_a, 'A'), (self.tile_b, 'B'), (self.tile_c, 'C')):
+            tile.clicked.connect(lambda _=False, t=tile, n=name: self.copy_tile_color(n, t))
+        self.slot_a.pickRequested.connect(self.open_color_a_dialog)
+        self.slot_b.pickRequested.connect(self.open_color_b_dialog)
+        self.slot_c.pickRequested.connect(self.open_color_c_dialog)
         # link clicks
         try:
             # 2-color mode controls
@@ -933,6 +1034,8 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         self.tile_a.set_size(tile_width, tile_height)
         self.tile_b.set_size(tile_width, tile_height)
         self.tile_c.set_size(tile_width, tile_height)
+        for slot in (self.slot_a, self.slot_b, self.slot_c):
+            slot.set_width(tile_width)
         
         # Update preview tiles based on mode
         if self.three_mode:
@@ -967,6 +1070,13 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         except Exception:
             pass
         super().closeEvent(event)
+
+    def copy_tile_color(self, name, tile):
+        """Copy a master tile's color to the clipboard in the selected format."""
+        fmt = self.format_combo.currentText()
+        text = format_color_line(tile.hex, fmt)
+        QApplication.clipboard().setText(text)
+        self.status.showMessage(f"Copied color {name}: {text}")
 
     def open_color_a_dialog(self):
         col = QColorDialog.getColor(QColor(self.tile_a.hex), self, "Choose Tile A")
@@ -1115,71 +1225,75 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # Map the friendly label to the internal key used by interpolate()
         sel = self.model_combo.currentText()
         model = self.settings.get_model_key(sel).lower()
-        
-        if self.three_mode:
-            # 3-color mode: create AC and CB gradients using exact INI counts
-            ac_steps = 2 + self.settings.ac_count  # A + AC preview tiles + C
-            cb_steps = 2 + self.settings.cb_count  # C + CB preview tiles + B
-            
-            try:
+        radius = self.settings.tile_border_radius
+
+        # Compute everything first. If anything fails we show the error and
+        # leave the previous (still self-consistent) display untouched.
+        try:
+            if self.three_mode:
+                ac_steps = 2 + len(self.preview_tiles_ac)  # A + AC tiles + C
+                cb_steps = 2 + len(self.preview_tiles_cb)  # C + CB tiles + B
                 ac_colors = interpolate(a, c, ac_steps, model)
                 cb_colors = interpolate(c, b, cb_steps, model)
-            except Exception as ex:
-                self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
-                ac_colors = interpolate(a, c, ac_steps, 'srgb')
-                cb_colors = interpolate(c, b, cb_steps, 'srgb')
-            
-            # Update only visible AC preview tiles
-            for i, lbl in enumerate(self.preview_tiles_ac):
-                if i < len(ac_colors) - 2:  # Exclude A and C
-                    lbl.setStyleSheet(f'background: {ac_colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-            
-            # Update only visible CB preview tiles
-            for i, lbl in enumerate(self.preview_tiles_cb):
-                if i < len(cb_colors) - 2:  # Exclude C and B
-                    lbl.setStyleSheet(f'background: {cb_colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-            
-            # Combine all colors for copying (AC without last + CB)
-            all_colors = ac_colors[:-1] + cb_colors  # Remove duplicate C from AC
-            self.current_colors = all_colors
-            
-            # Update master tiles with exact colors from gradients
-            self.tile_a.set_color(ac_colors[0])
-            self.tile_c.set_color(ac_colors[-1])  # Should equal cb_colors[0]
-            self.tile_b.set_color(cb_colors[-1])
-            
-            # Smooth gradient for preview (A to C to B)
-            smooth_ac = interpolate(a, c, 256, model)
-            smooth_cb = interpolate(c, b, 256, model)
-            smooth = smooth_ac[:-1] + smooth_cb  # Remove duplicate C
-            
-        else:
-            # 2-color mode: create AB gradient using exact INI count
-            steps = 2 + self.settings.ab_count
-            try:
+                all_colors = ac_colors[:-1] + cb_colors  # C appears once
+                smooth = interpolate(a, c, 256, model)[:-1] + interpolate(c, b, 256, model)
+            else:
+                steps = 2 + len(self.preview_tiles_ab)
                 colors = interpolate(a, b, steps, model)
-            except Exception as ex:
-                self.status.showMessage(f"Interpolation error for mode {model}: {ex}. Falling back to sRGB.")
-                colors = interpolate(a, b, steps, 'srgb')
+                all_colors = colors
+                smooth = interpolate(a, b, 512, model)
+        except Exception as ex:
+            self.status.showMessage(f"Gradient error ({model}): {ex}")
+            return
 
-            # Store colors for copying
-            self.current_colors = colors
-
-            # Update only visible AB preview tiles
+        # The master tiles are the user's input: never overwrite them here.
+        if self.three_mode:
+            for i, lbl in enumerate(self.preview_tiles_ac):
+                lbl.setStyleSheet(f'background: {ac_colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
+            for i, lbl in enumerate(self.preview_tiles_cb):
+                lbl.setStyleSheet(f'background: {cb_colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
+        else:
             for i, lbl in enumerate(self.preview_tiles_ab):
-                if i < len(colors) - 2:  # Exclude A and B
-                    lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+                lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
 
-            # Update master tiles with exact colors from gradient
-            self.tile_a.set_color(colors[0])
-            self.tile_b.set_color(colors[-1])
-
-            # Smooth gradient for preview
-            smooth = interpolate(colors[0], colors[-1], 512, model)
-        
+        self.current_colors = all_colors
+        for slot in (self.slot_a, self.slot_b, self.slot_c):
+            slot.sync_from_tile()
         self.gradient_preview.set_colors(smooth)
+        self.update_swatch_boxes(all_colors)
         mode_text = "3-color" if self.three_mode else "2-color"
-        self.status.showMessage(f"Mode: {model} ({mode_text}) — Preview updated.")
+        self.status.showMessage(f"Mode: {model} ({mode_text}) — {len(all_colors)} colors.")
+
+    def on_hex_entered(self, which, hexcolor):
+        """A hex was typed under master tile A, B or C."""
+        tile = {'A': self.tile_a, 'B': self.tile_b, 'C': self.tile_c}[which]
+        if tile.hex == hexcolor:
+            return
+        tile.set_color(hexcolor)
+        setattr(self.settings, f'color_{which.lower()}', hexcolor)
+        try:
+            self.settings.save()
+        except Exception:
+            pass
+        self.on_color_changed()
+
+    def update_swatch_boxes(self, colors):
+        """List the gradient's colors (master tiles + swatches, in order) in the three boxes."""
+        boxes = (
+            (self.conv_hex, "Hex"),
+            (self.conv_rgb256, "RGB 256"),
+            (self.conv_rgb01, "RGB 0-1"),
+        )
+        for box, fmt in boxes:
+            box.blockSignals(True)
+            try:
+                box.clear_error_style()
+                box.set_source_highlight(False)
+                box.setPlainText('\n'.join(format_color_line(col, fmt) for col in colors))
+            finally:
+                box.blockSignals(False)
+        # blockSignals also suppressed textChanged, so persist the hex list explicitly
+        self.settings.converter_hex = self.conv_hex.toPlainText()
 
     # --- dynamic tile management ---
     def rebuild_tiles(self):
@@ -1190,7 +1304,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             w = item.widget()
             if w is not None:
                 # avoid deleting tile_a/tile_b/tile_c widgets; just hide others
-                if w not in (self.tile_a, self.tile_b, self.tile_c):
+                if w not in (self.slot_a, self.slot_b, self.slot_c):
                     w.setParent(None)
                 else:
                     # keep existing master tiles but hide them for now
@@ -1198,9 +1312,9 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         
         if self.three_mode:
             # 3-color mode: Show A, C, B and AC/CB gradients; hide AB gradients
-            self.tile_a.show()
-            self.tile_b.show()
-            self.tile_c.show()
+            self.slot_a.show()
+            self.slot_b.show()
+            self.slot_c.show()
             
             # Hide AB gradient tiles
             for lbl in self.preview_tiles_ab:
@@ -1217,19 +1331,19 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
                 lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             
             # Layout: A + AC tiles + C + CB tiles + B
-            self.tiles_container.addWidget(self.tile_a)
+            self.tiles_container.addWidget(self.slot_a, 0, Qt.AlignTop)
             for lbl in self.preview_tiles_ac:
-                self.tiles_container.addWidget(lbl)
-            self.tiles_container.addWidget(self.tile_c)
+                self.tiles_container.addWidget(lbl, 0, Qt.AlignTop)
+            self.tiles_container.addWidget(self.slot_c, 0, Qt.AlignTop)
             for lbl in self.preview_tiles_cb:
-                self.tiles_container.addWidget(lbl)
-            self.tiles_container.addWidget(self.tile_b)
+                self.tiles_container.addWidget(lbl, 0, Qt.AlignTop)
+            self.tiles_container.addWidget(self.slot_b, 0, Qt.AlignTop)
             
         else:
             # 2-color mode: Show A, B and AB gradients; hide C and AC/CB gradients
-            self.tile_a.show()
-            self.tile_b.show()
-            self.tile_c.hide()
+            self.slot_a.show()
+            self.slot_b.show()
+            self.slot_c.hide()
             
             # Hide AC and CB gradient tiles
             for lbl in self.preview_tiles_ac:
@@ -1243,10 +1357,10 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
                 lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
             
             # Layout: A + AB tiles + B
-            self.tiles_container.addWidget(self.tile_a)
+            self.tiles_container.addWidget(self.slot_a, 0, Qt.AlignTop)
             for lbl in self.preview_tiles_ab:
-                self.tiles_container.addWidget(lbl)
-            self.tiles_container.addWidget(self.tile_b)
+                self.tiles_container.addWidget(lbl, 0, Qt.AlignTop)
+            self.tiles_container.addWidget(self.slot_b, 0, Qt.AlignTop)
         
         # Update tile sizes and spacing
         self.update_tile_sizes()
