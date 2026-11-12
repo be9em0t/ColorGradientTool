@@ -11,6 +11,7 @@ base_dir = os.path.abspath('.')
 additional_datas = [
     (os.path.join(base_dir, 'ColorGradient.ini'), '.'),
     (os.path.join(base_dir, 'resources', 'ColorGradientTool_icon.png'), 'resources'),
+    (os.path.join(base_dir, 'resources', 'icons', 'symbol-color.svg'), os.path.join('resources', 'icons')),
     (os.path.join(base_dir, 'images', 'color_colors_themes_icon.png'), 'images')
 ]
 
@@ -59,10 +60,10 @@ app = BUNDLE(
     name='ColorGradientTool.app',
     icon=os.path.join(base_dir, 'resources', 'ColorGradientTool_icon.png'),
     bundle_identifier='com.yourcompany.colorgradienttool',
-    version='1.2.0',
+    version='1.3.0',
     info_plist={
-        'CFBundleShortVersionString': '1.2.0',
-        'CFBundleVersion': '1.2.0',
+        'CFBundleShortVersionString': '1.3.0',
+        'CFBundleVersion': '1.3.0',
         'NSHighResolutionCapable': True,
         'LSMinimumSystemVersion': '10.15',  # macOS Catalina
     }

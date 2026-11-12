@@ -36,5 +36,6 @@ Many thanks to the developers of
 - coloraide
 - PySide6
 - pyinstaller
+- the [codicon](https://github.com/microsoft/vscode-codicons) icon set by Microsoft (the palette icon, CC-BY 4.0)
 
 And a tip of the hat to Copilot and its cousins—couldn’t have done it without you.

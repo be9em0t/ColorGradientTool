@@ -7,3 +7,6 @@ coloraide>=3.0.0
 
 # Optional: macOS app icon support (only needed on macOS)
 # pyobjc-framework-Cocoa>=9.0; sys_platform == "darwin"
+
+# Build only: PyInstaller needs Pillow to convert the macOS app icon to .icns
+pillow>=10.0.0

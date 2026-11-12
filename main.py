@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QColor, QPainter, QPixmap, QIcon, QPainterPath
 from PySide6.QtCore import Qt, QSize, Signal
+from PySide6.QtSvg import QSvgRenderer
 from pathlib import Path
 
 # Import our modules
@@ -328,6 +329,21 @@ class ColorTile(QPushButton):
 
 
 
+class PreviewTile(QLabel):
+    """An in-between gradient swatch. Clicking it copies its color."""
+    clicked = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self.hex = '#777777'
+        self.setCursor(Qt.PointingHandCursor)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+
 class ColorSlot(QWidget):
     """A master color tile with a hex input box underneath it."""
     hexCommitted = Signal(str)   # a valid, normalized '#rrggbb' was entered
@@ -372,21 +388,21 @@ class ColorSlot(QWidget):
         self.edit.textEdited.connect(lambda _t: self._set_error(False))
 
     @staticmethod
-    def _palette_icon():
-        """Small painter's-palette icon, drawn in code so no image asset is needed."""
-        pix = QPixmap(32, 32)
+    def _palette_icon(color='#eaeff2', size=16):
+        """Codicon 'symbol-color' (resources/icons/symbol-color.svg), recolored and rendered crisply
+        for the current display scale. A missing file raises: no silent fallback icon."""
+        svg = (Path(__file__).parent / 'resources' / 'icons' / 'symbol-color.svg').read_text(encoding='utf-8')
+        renderer = QSvgRenderer(svg.replace('currentColor', color).encode('utf-8'))
+        if not renderer.isValid():
+            raise ValueError('resources/icons/symbol-color.svg is not a valid SVG')
+        scale = max(1.0, QApplication.primaryScreen().devicePixelRatio()) if QApplication.instance() else 2.0
+        px = int(size * scale)
+        pix = QPixmap(px, px)
         pix.fill(Qt.transparent)
         p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor('#eaeff2'))
-        p.drawEllipse(2, 4, 28, 24)
-        p.setBrush(QColor('#3a4a56'))
-        p.drawEllipse(19, 17, 7, 7)  # thumb hole
-        for x, y, c in ((8, 10, '#e5484d'), (15, 7, '#f5d90a'), (22, 10, '#30a46c'), (8, 18, '#3e63dd')):
-            p.setBrush(QColor(c))
-            p.drawEllipse(x, y, 6, 6)
+        renderer.render(p)
         p.end()
+        pix.setDevicePixelRatio(scale)
         return QIcon(pix)
 
     def _set_error(self, bad):
@@ -468,28 +484,19 @@ class MainWindow(QWidget):
         # 2-color mode: AB gradient tiles
         self.preview_tiles_ab = []
         for _ in range(self.settings.ab_count):
-            lbl = QLabel()
-            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)  # Initial size, will be updated by update_tile_sizes()
-            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            lbl = self._make_preview_tile()
             self.preview_tiles_ab.append(lbl)
         
         # 3-color mode: AC gradient tiles (left side)
         self.preview_tiles_ac = []
         for _ in range(self.settings.ac_count):
-            lbl = QLabel()
-            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
-            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            lbl = self._make_preview_tile()
             self.preview_tiles_ac.append(lbl)
         
         # 3-color mode: CB gradient tiles (right side)
         self.preview_tiles_cb = []
         for _ in range(self.settings.cb_count):
-            lbl = QLabel()
-            lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
-            lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-            lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            lbl = self._make_preview_tile()
             self.preview_tiles_cb.append(lbl)
 
         # Add/remove link-like labels (styled) centered between the Tile A and Tile B labels
@@ -526,11 +533,11 @@ class MainWindow(QWidget):
         self.sub_link_right.setCursor(Qt.PointingHandCursor)
         self.sub_link_right.setToolTip('Remove a tile from right gradient (C-B)')
 
-        self.middle_label = QLabel('[enable 3-tile]')
+        self.middle_label = QLabel('[switch to 3-color]')
         self.middle_label.setStyleSheet(f'color: {LINK_COLOR}; font-size: 14px;')
         self.middle_label.setAlignment(Qt.AlignCenter)
         self.middle_label.setCursor(Qt.PointingHandCursor)
-        self.middle_label.setToolTip('Click to enable/disable 3-color mode')
+        self.middle_label.setToolTip('Switch between 2-color and 3-color gradients')
 
         # Color model selector (friendly labels shown; use mapping to internal keys)
         self.model_combo = QComboBox()
@@ -1071,6 +1078,20 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             pass
         super().closeEvent(event)
 
+    def _make_preview_tile(self):
+        lbl = PreviewTile()
+        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)  # Initial size, will be updated by update_tile_sizes()
+        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
+        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lbl.clicked.connect(lambda t=lbl: self.copy_tile_color(self._preview_tile_name(t), t))
+        return lbl
+
+    def _preview_tile_name(self, tile):
+        for prefix, tiles in (('A-B', self.preview_tiles_ab), ('A-C', self.preview_tiles_ac), ('C-B', self.preview_tiles_cb)):
+            if tile in tiles:
+                return f'{prefix} #{tiles.index(tile) + 1}'
+        return '?'
+
     def copy_tile_color(self, name, tile):
         """Copy a master tile's color to the clipboard in the selected format."""
         fmt = self.format_combo.currentText()
@@ -1182,8 +1203,8 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         
         if self.three_mode:
             # 3-color mode: [-][+] [Tile C] [-][+]
-            self.middle_label.setText('[Tile C]')
-            self.middle_label.setToolTip('Click to disable 3-color mode')
+            self.middle_label.setText('[switch to 2-color]')
+            self.middle_label.setToolTip('Hide Tile C and go back to a 2-color gradient')
             
             self.links_layout.addWidget(self.sub_link_left)
             self.links_layout.addWidget(self.add_link_left)
@@ -1192,8 +1213,8 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
             self.links_layout.addWidget(self.add_link_right)
         else:
             # 2-color mode: [-] [tile] [+]
-            self.middle_label.setText('[enable 3-tile]')
-            self.middle_label.setToolTip('Click to enable 3-color mode')
+            self.middle_label.setText('[switch to 3-color]')
+            self.middle_label.setToolTip('Add Tile C in the middle for a 3-color gradient')
             
             self.links_layout.addWidget(self.sub_link)
             self.links_layout.addWidget(self.middle_label)
@@ -1249,11 +1270,14 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         # The master tiles are the user's input: never overwrite them here.
         if self.three_mode:
             for i, lbl in enumerate(self.preview_tiles_ac):
+                lbl.hex = ac_colors[i+1]
                 lbl.setStyleSheet(f'background: {ac_colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
             for i, lbl in enumerate(self.preview_tiles_cb):
+                lbl.hex = cb_colors[i+1]
                 lbl.setStyleSheet(f'background: {cb_colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
         else:
             for i, lbl in enumerate(self.preview_tiles_ab):
+                lbl.hex = colors[i+1]
                 lbl.setStyleSheet(f'background: {colors[i+1]}; border: 1px solid #222; border-radius: {radius}px;')
 
         self.current_colors = all_colors
@@ -1374,10 +1398,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         if len(self.preview_tiles_ab) >= self.max_tiles_ab:
             self.status.showMessage(f'Already at maximum of {2 + self.max_tiles_ab} tiles.')
             return
-        lbl = QLabel()
-        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)  # Initial size, will be updated by update_tile_sizes()
-        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lbl = self._make_preview_tile()
         self.preview_tiles_ab.append(lbl)
         # Update settings and save immediately
         self.settings.ab_count = len(self.preview_tiles_ab)
@@ -1411,10 +1432,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         if len(self.preview_tiles_ac) >= self.max_tiles_ac:
             self.status.showMessage(f'Already at maximum of {self.max_tiles_ac} tiles for AC gradient.')
             return
-        lbl = QLabel()
-        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
-        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lbl = self._make_preview_tile()
         self.preview_tiles_ac.append(lbl)
         # Update settings and save immediately
         self.settings.ac_count = len(self.preview_tiles_ac)
@@ -1447,10 +1465,7 @@ HSL — HSL — Hue‑Saturation‑Lightness (common cylindrical RGB model for a
         if len(self.preview_tiles_cb) >= self.max_tiles_cb:
             self.status.showMessage(f'Already at maximum of {self.max_tiles_cb} tiles for CB gradient.')
             return
-        lbl = QLabel()
-        lbl.setFixedSize(80, DEFAULT_TILE_HEIGHT)
-        lbl.setStyleSheet(f'background: #777; border: 1px solid #222; border-radius: {self.settings.tile_border_radius}px;')
-        lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        lbl = self._make_preview_tile()
         self.preview_tiles_cb.append(lbl)
         # Update settings and save immediately
         self.settings.cb_count = len(self.preview_tiles_cb)
